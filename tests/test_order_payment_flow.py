@@ -30,18 +30,18 @@ async def test_visible_order_journey_requires_payment_review_before_work(env):
     assert accept in callbacks(last(env, ADMIN))
     assert env.store.ticket(ticket.id).status == "new"
     await env.callback(ADMIN, accept)
-    assert "ДЕМО" in last(env, CLIENT)["text"]
-    assert "не переводите" in last(env, CLIENT)["text"].lower()
+    assert "тестовый режим" in last(env, CLIENT)["text"]
+    assert "переводить не нужно" in last(env, CLIENT)["text"].lower()
     assert env.store.ticket(ticket.id).payment_stage == "awaiting_payment"
     before = len(sent(env, CLIENT))
     await env.callback(ADMIN, accept)
     assert len(sent(env, CLIENT)) == before, "Stale accept must not resend requisites"
 
-    await env.message(CLIENT, photo=True, caption="Тестовое подтверждение")
+    await env.proof(CLIENT, photo=True, caption="Тестовое подтверждение")
     ticket = env.store.ticket(ticket.id)
     assert ticket.payment_stage == "review" and ticket.status == "new"
     assert "🔎 Проверяем оплату" in last(env, CLIENT)["text"]
-    assert f"a:proofs:{ticket.id}" in callbacks(last(env, ADMIN))
+    assert any(v.startswith("a:confirm_payment:") for v in callbacks(last(env, ADMIN)))
     await env.callback(ADMIN, f"a:proofs:{ticket.id}")
     confirm = f"a:confirm_payment:{ticket.id}:{ticket.version}"
     assert confirm in callbacks(last(env, ADMIN))
@@ -61,12 +61,12 @@ async def test_visible_order_journey_requires_payment_review_before_work(env):
 
 async def test_links_are_saved_without_fetching_and_duplicate_proof_is_idempotent(env):
     ticket = await request_payment(env)
-    await env.message(CLIENT, "Тест: https://example.com/receipt/123", message_id=902)
+    await env.proof(CLIENT, "Тест: https://example.com/receipt/123", message_id=902)
     current = env.store.ticket(ticket.id)
     before = len(env.request.calls)
     await env.message(CLIENT, "Тест: https://example.com/receipt/123", message_id=902)
     assert len(env.request.calls) == before
-    assert env.store.ticket(ticket.id) == current
+    assert (env.store.ticket(ticket.id).status, env.store.ticket(ticket.id).version) == (current.status, current.version)
     assert len(env.store.payment_proofs(ticket.id)) == 1
     assert env.store.payment_proofs(ticket.id)[0]["file_id"] is None
     await env.callback(ADMIN, f"a:proofs:{ticket.id}")
@@ -98,14 +98,14 @@ async def test_old_status_buttons_cannot_bypass_payment(env, action):
 
 async def test_rejection_requires_new_proof_and_stale_confirmation_cannot_start_work(env):
     ticket = await request_payment(env)
-    await env.message(CLIENT, "https://example.com/first")
+    await env.proof(CLIENT, "https://example.com/first")
     review = env.store.ticket(ticket.id)
     await env.callback(ADMIN, f"a:reject_payment:{ticket.id}:{review.version}")
     assert "новый" in last(env, CLIENT)["text"]
     assert env.store.ticket(ticket.id).payment_stage == "awaiting_payment"
     await env.callback(ADMIN, f"a:confirm_payment:{ticket.id}:{review.version}")
     assert env.store.ticket(ticket.id).status == "new"
-    await env.message(CLIENT, "https://example.com/second")
+    await env.proof(CLIENT, "https://example.com/second")
     latest = env.store.ticket(ticket.id)
     await env.callback(ADMIN, f"a:confirm_payment:{ticket.id}:{review.version}")
     assert env.store.ticket(ticket.id).payment_stage == "review"
@@ -115,7 +115,7 @@ async def test_rejection_requires_new_proof_and_stale_confirmation_cannot_start_
 
 async def test_proof_is_private_and_cannot_approve_another_customers_order(env):
     ticket = await request_payment(env)
-    await env.message(CLIENT, photo=True, caption="PRIVATE PAYMENT")
+    await env.proof(CLIENT, photo=True, caption="PRIVATE PAYMENT")
     review = env.store.ticket(ticket.id)
     for data in (f"a:proofs:{ticket.id}", f"a:confirm_payment:{ticket.id}:{review.version}"):
         await env.callback(OTHER, data)
@@ -146,12 +146,13 @@ async def test_failed_requisites_delivery_keeps_recoverable_payment_stage(env, e
     assert "не подтверждена" in last(env, ADMIN)["text"]
     env.request.fail_chat = None
     await env.callback(CLIENT, f"c:requisites:{ticket.id}")
-    assert "DEMO-" in last(env, CLIENT)["text"]
+    assert "Реальные реквизиты ещё не подключены" in last(env, CLIENT)["text"]
+    assert "DEMO-" not in last(env, CLIENT)["text"]
 
 
 async def test_image_failure_prevents_visible_approval_until_evidence_is_opened(env):
     ticket = await request_payment(env)
-    await env.message(CLIENT, photo=True)
+    await env.proof(CLIENT, photo=True)
     original = env.request.do_request
 
     async def fail_image(url, method, request_data=None, **kwargs):
@@ -168,7 +169,7 @@ async def test_image_failure_prevents_visible_approval_until_evidence_is_opened(
 
 async def test_screenshot_as_image_document_survives_reopening(env):
     ticket = await request_payment(env)
-    await env.message(CLIENT, document={
+    await env.proof(CLIENT, document={
         "file_id": "test-image-file", "file_unique_id": "image-unique", "file_name": "receipt.png",
         "mime_type": "image/png", "file_size": 5000,
     })
@@ -196,7 +197,7 @@ async def test_second_operator_cannot_approve_payment_claimed_for_review(env):
     desk = env.app.handlers[0][0].callback.__self__
     desk.config = replace(desk.config, admin_ids=(ADMIN, second))
     ticket = await request_payment(env)
-    await env.message(CLIENT, "https://example.com/demo")
+    await env.proof(CLIENT, "https://example.com/demo")
     await env.message(ADMIN, "/next")
     review = env.store.ticket(ticket.id)
     await env.callback(second, f"a:confirm_payment:{ticket.id}:{review.version}")
@@ -205,7 +206,7 @@ async def test_second_operator_cannot_approve_payment_claimed_for_review(env):
 
 async def test_status_notification_reply_is_mapped_and_more_screen_clears_admin_target(env):
     ticket = await request_payment(env)
-    await env.message(CLIENT, "https://example.com/demo")
+    await env.proof(CLIENT, "https://example.com/demo")
     review = env.store.ticket(ticket.id)
     await env.callback(ADMIN, f"a:confirm_payment:{ticket.id}:{review.version}")
     notification = env.store.db.execute(

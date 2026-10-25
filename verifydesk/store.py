@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import re
+import secrets
 import sqlite3
 import time
 import unicodedata
@@ -152,6 +153,24 @@ class Store:
             CREATE TABLE IF NOT EXISTS operator_claims (
                 ticket_id INTEGER PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
                 operator_id INTEGER NOT NULL UNIQUE CHECK(operator_id > 0),
+                expires_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS operator_focus (
+                operator_id INTEGER PRIMARY KEY,
+                ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+                prompt_id INTEGER NOT NULL,
+                expires_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS input_drafts (
+                user_id INTEGER PRIMARY KEY,
+                ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+                token TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK(kind IN ('operator','proof')),
+                body TEXT NOT NULL,
+                source_chat INTEGER NOT NULL,
+                source_message INTEGER NOT NULL,
+                file_id TEXT, file_kind TEXT,
+                ticket_version INTEGER NOT NULL,
                 expires_at REAL NOT NULL
             );
         """)
@@ -568,11 +587,69 @@ class Store:
         if ticket_id is not None:
             self._positive_id(ticket_id)
         with self.db:
+            self.db.execute(
+                "DELETE FROM operator_focus WHERE operator_id=? AND (? IS NULL OR ticket_id=?)",
+                (operator_id, ticket_id, ticket_id),
+            )
             changed = self.db.execute(
                 "DELETE FROM operator_claims WHERE operator_id=? AND (? IS NULL OR ticket_id=?)",
                 (operator_id, ticket_id, ticket_id),
             ).rowcount
         return bool(changed)
+
+    def focus_operator(self, operator_id: int, ticket_id: int, prompt_id: int):
+        if self.claim_owner(ticket_id) != operator_id:
+            raise StaleTicket("Выберите заказ заново.")
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO operator_focus VALUES(?,?,?,?)",
+                (operator_id, ticket_id, prompt_id, time.time() + CLAIM_SECONDS),
+            )
+
+    def focused_ticket(self, operator_id: int):
+        row = self.db.execute(
+            "SELECT * FROM operator_focus WHERE operator_id=? AND expires_at>?",
+            (operator_id, time.time()),
+        ).fetchone()
+        if not row or self.claim_owner(row["ticket_id"]) != operator_id:
+            return None
+        if self.stale_operator_reply(operator_id, row["prompt_id"], operator_id):
+            return None
+        ticket = self.ticket(row["ticket_id"])
+        return ticket if ticket and ticket.status in OPEN_STATUSES else None
+
+    def clear_input(self, user_id: int):
+        with self.db:
+            self.db.execute("DELETE FROM operator_focus WHERE operator_id=?", (user_id,))
+            self.db.execute("DELETE FROM input_drafts WHERE user_id=?", (user_id,))
+
+    def save_draft(self, user_id, ticket_id, kind, body, source_chat, source_message,
+                   file_id=None, file_kind=None):
+        ticket = self.ticket(ticket_id)
+        if not ticket or ticket.status not in OPEN_STATUSES:
+            raise StaleTicket()
+        if kind == "proof" and (ticket.user_id != user_id or ticket.payment_stage not in {"awaiting_payment", "review"}):
+            raise StaleTicket()
+        if kind == "operator" and self.focused_ticket(user_id) != ticket:
+            raise StaleTicket()
+        previous = self.draft(user_id)
+        if previous and (previous["source_chat"], previous["source_message"]) == (source_chat, source_message):
+            return previous
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO input_drafts VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (user_id, ticket_id, secrets.token_hex(6), kind, body, source_chat, source_message,
+                 file_id, file_kind, ticket.version, time.time() + 10 * 60),
+            )
+        return self.draft(user_id)
+
+    def draft(self, user_id, token=None):
+        if token is not None and (not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{12}", token)):
+            return None
+        row = self.db.execute(
+            "SELECT * FROM input_drafts WHERE user_id=? AND expires_at>?", (user_id, time.time())
+        ).fetchone()
+        return row if row and (token is None or secrets.compare_digest(row["token"], token)) else None
 
     def set_status(self, ticket_id: int, version: int, status: str, actor_id: int) -> Ticket:
         with self.db:

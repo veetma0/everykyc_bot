@@ -68,13 +68,12 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
     assert current.status == "new"  # Opening a new order does not start unpaid work.
     await press(env, ADMIN, f"a:request_payment:{ticket.id}:{current.version}")
     assert env.store.ticket(ticket.id).payment_stage == "awaiting_payment"
-    assert "MOCK" in last(env, CLIENT)["text"] or "ДЕМО" in last(env, CLIENT)["text"]
-    assert "не перевод" in last(env, CLIENT)["text"].lower()
+    assert "тестовый режим" in last(env, CLIENT)["text"]
+    assert "переводить не нужно" in last(env, CLIENT)["text"].lower()
 
-    await env.message(CLIENT, "Тестовое подтверждение: https://example.org/mock-proof/123")
+    await env.proof(CLIENT, "Тестовое подтверждение: https://example.org/mock-proof/123")
     current = env.store.ticket(ticket.id)
     assert current.status == "new" and current.payment_stage == "review"
-    await press(env, ADMIN, f"a:proofs:{ticket.id}")
     assert "https://example.org/mock-proof/123" in last(env, ADMIN)["text"]
     await press(env, ADMIN, f"a:confirm_payment:{ticket.id}:{current.version}")
     current = env.store.ticket(ticket.id)
@@ -93,9 +92,9 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
     assert env.store.ticket(ticket.id).status == "in_progress"
 
     await press(env, CLIENT, f"c:view:{ticket.id}")
-    await press(env, CLIENT, f"c:details:{ticket.id}")
-    await press(env, CLIENT, f"c:history:{ticket.id}:0")
-    assert "ссылка истекла" in last(env, CLIENT)["text"]
+    await press(env, CLIENT, "c:guide:claude")
+    assert "Строго следуйте нашей инструкции" in last(env, CLIENT)["text"]
+    await press(env, CLIENT, "c:current")
 
     await env.callback(ADMIN, f"a:view:{ticket.id}")
     version = env.store.ticket(ticket.id).version
@@ -118,34 +117,14 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
     assert followup.price_usd == "50.00" and followup.payment_stage == "not_requested"
 
 
-async def test_every_demo_network_can_be_selected_from_visible_paginated_buttons(env):
+async def test_every_retired_network_button_returns_to_single_current_order_action(env):
     ticket = await order(env)
     before = env.store.ticket(ticket.id)
-    selected = set()
-    for group in catalog.NETWORK_GROUPS:
-        await env.callback(CLIENT, f"c:pay:{ticket.id}")
-        await press(env, CLIENT, f"c:networks:{ticket.id}:{group}:0")
-        offset = 0
-        while True:
-            page_buttons = callbacks(last(env, CLIENT))
-            network_buttons = [value for value in page_buttons if value.startswith(f"c:network:{ticket.id}:")]
-            assert network_buttons
-            for value in network_buttons:
-                await env.callback(CLIENT, f"c:networks:{ticket.id}:{group}:{offset}")
-                await press(env, CLIENT, value)
-                selected.add(value.rsplit(":", 1)[-1])
-                assert "ДЕМО" in last(env, CLIENT)["text"]
-                assert env.store.ticket(ticket.id).demo_network == value.rsplit(":", 1)[-1]
-                await press(env, CLIENT, f"c:pay:{ticket.id}")
-            next_page = f"c:networks:{ticket.id}:{group}:{offset + 8}"
-            if next_page not in page_buttons:
-                break
-            await env.callback(CLIENT, f"c:networks:{ticket.id}:{group}:{offset}")
-            await press(env, CLIENT, next_page)
-            offset += 8
-    after = env.store.ticket(ticket.id)
-    assert selected == set(catalog.NETWORK_BY_CODE)
-    assert (after.status, after.version, after.price_usd) == (before.status, before.version, before.price_usd)
+    for network in catalog.NETWORKS:
+        await env.callback(CLIENT, f"c:network:{ticket.id}:{network.code}")
+        assert len(callbacks(last(env, CLIENT))) == 1
+        assert not any(":network" in value for value in callbacks(last(env, CLIENT)))
+        assert env.store.ticket(ticket.id) == before
     assert not any(method in {"sendInvoice", "createInvoiceLink"} for method, _ in env.request.calls)
 
 
@@ -327,8 +306,7 @@ async def test_explicit_customer_prompt_allows_operator_to_test_a_real_own_reque
     ticket = await order(env, uid=ADMIN)
     # The self-test account also receives the operator notification after order creation.
     await env.callback(ADMIN, f"c:view:{ticket.id}")
-    await press(env, ADMIN, f"c:details:{ticket.id}")
-    assert f"c:write:{ticket.id}" not in callbacks(last(env, ADMIN))
+    assert f"c:write:{ticket.id}" in callbacks(last(env, ADMIN))
     await env.callback(ADMIN, f"c:write:{ticket.id}")
     assert last(env, ADMIN)["reply_markup"]["force_reply"]
     prompt = env.store.db.execute(

@@ -1,8 +1,6 @@
 """Integration checks for service offers, personal cards and non-payable USDT previews."""
 
-from collections import Counter
 from pathlib import Path
-import re
 
 import pytest
 
@@ -158,63 +156,34 @@ async def test_note_can_be_cleared_without_sending_minus_to_customer(env):
     assert len(sent(env, CLIENT)) == before
 
 
-async def test_usdt_checkout_is_explicitly_demo_and_contains_no_payment_mechanism(env):
+async def test_retired_payment_menu_returns_to_current_order_without_extra_choices(env):
     ticket = await order(env)
     await env.callback(CLIENT, f"c:pay:{ticket.id}")
     screen = last(env, CLIENT)
-    assert "ДЕМО" in screen["text"] and "Деньги не переводятся" in screen["text"]
-    assert "реквизитов нет" in screen["text"]
-    assert "$35" in screen["text"] and "Стоимость сопровождения" in screen["text"]
-    assert not re.search(r"\b0x[a-fA-F0-9]{40}\b|\bT[A-Za-z0-9]{33}\b", screen["text"])
-    assert all(not button.get("pay") and not button.get("url") for button in buttons(screen))
-    assert all(
-        not any(word in value.lower() for word in ("paid", "invoice", "sendtx"))
-        for value in callbacks(screen)
-    )
-    assert not any(
-        method in {"sendInvoice", "createInvoiceLink", "answerPreCheckoutQuery"}
-        for method, _ in env.request.calls
-    )
+    assert "Заказ" in screen["text"]
+    assert len(buttons(screen)) == 1
+    assert not any(":network" in value for value in callbacks(screen))
+    assert not any(method in {"sendInvoice", "createInvoiceLink"} for method, _ in env.request.calls)
 
 
-async def test_all_mock_network_groups_are_complete_separate_and_paginated(env):
+async def test_retired_network_pages_cannot_restore_old_button_menus(env):
     ticket = await order(env)
-    assert len(catalog.NETWORKS) == len(catalog.NETWORK_BY_CODE) == 37
-    assert Counter(network.group for network in catalog.NETWORKS) == {"usdt": 13, "usdt0": 23, "bridged": 1}
-    for group, title in catalog.NETWORK_GROUPS.items():
-        expected = {network.code for network in catalog.NETWORKS if network.group == group}
-        found = set()
-        for offset in range(0, len(expected), 8):
+    for group in catalog.NETWORK_GROUPS:
+        for offset in (0, 8, 16):
             await env.callback(CLIENT, f"c:networks:{ticket.id}:{group}:{offset}")
-            screen = last(env, CLIENT)
-            assert title in screen["text"] and "ДЕМО" in screen["text"]
-            for value in callbacks(screen):
-                if value.startswith(f"c:network:{ticket.id}:"):
-                    found.add(value.rsplit(":", 1)[-1])
-            if group == "usdt0":
-                assert "отдельная версия токена" in screen["text"]
-                assert "не обычный USDT" in screen["text"]
-        assert found == expected
+            assert len(buttons(last(env, CLIENT))) == 1
+            assert not any(":network" in value for value in callbacks(last(env, CLIENT)))
+    assert env.store.ticket(ticket.id).demo_network is None
 
 
 @pytest.mark.parametrize("network", ["usdt_tron", "usdt_ton", "usdt0_arbitrum", "bridged_bnb"])
-async def test_mock_network_selection_persists_without_status_price_or_version_changes(env, network):
+async def test_retired_network_selection_is_read_only(env, network):
     initial = await order(env)
-    messages_before = env.store.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
     await env.callback(CLIENT, f"c:network:{initial.id}:{network}")
     ticket = env.store.ticket(initial.id)
-    assert ticket.demo_network == network
-    assert (ticket.status, ticket.version, ticket.service_code, ticket.plan_code, ticket.price_usd) == (
-        initial.status,
-        initial.version,
-        initial.service_code,
-        initial.plan_code,
-        initial.price_usd,
-    )
-    assert env.store.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == messages_before
-    assert "оплата не совершена" in last(env, CLIENT)["text"].lower()
-    assert "демо" in last(env, CLIENT)["text"].lower()
-    assert not re.search(r"\b0x[a-fA-F0-9]{40}\b|\bT[A-Za-z0-9]{33}\b", last(env, CLIENT)["text"])
+    assert ticket == initial
+    assert ticket.demo_network is None
+    assert len(callbacks(last(env, CLIENT))) == 1
 
 
 async def test_other_customer_cannot_view_or_choose_mock_network_for_ticket(env):
@@ -240,9 +209,9 @@ async def test_mock_selection_cannot_change_closed_ticket_or_unknown_network(env
     latest = env.store.ticket(ticket.id)
     assert latest.status == "resolved" and latest.version == closed.version
     assert latest.demo_network is None
-    assert "закры" in last(env, CLIENT)["text"].lower()
+    assert "выполнен" in last(env, CLIENT)["text"].lower()
     await env.callback(CLIENT, f"c:pay:{ticket.id}")
-    assert "закры" in last(env, CLIENT)["text"].lower()
+    assert "выполнен" in last(env, CLIENT)["text"].lower()
     assert not any(value.startswith(f"c:network:{ticket.id}:") for value in callbacks(last(env, CLIENT)))
 
 
@@ -315,14 +284,15 @@ async def test_preview_ticket_history_and_payment_buttons_remain_preview_scoped(
 async def test_help_only_offers_claude_and_keeps_official_owner_verification_guidance(env):
     await env.message(CLIENT, "/help")
     screen = last(env, CLIENT)
-    assert "c:guide:claude" in callbacks(screen)
+    assert callbacks(screen) == ["c:current"]
     assert all(service not in screen["text"].lower() for service in ("alipay", "chatgpt", "gemini"))
     assert not any(service in value for value in callbacks(screen) for service in ("alipay", "chatgpt", "gemini"))
     await env.callback(CLIENT, "c:guide:claude")
     guide = last(env, CLIENT)
     assert "Claude" in guide["text"]
     assert "сво" in guide["text"].lower()
-    assert any(button.get("url", "").startswith("https://support.claude.com/") for button in buttons(guide))
+    assert "Строго следуйте нашей инструкции" in guide["text"]
+    assert len(buttons(guide)) == 1
 
 
 @pytest.mark.parametrize("command,expected", [("/services", "Claude"), ("/profile", "Мои заказы")])

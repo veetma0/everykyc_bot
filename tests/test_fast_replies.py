@@ -36,7 +36,8 @@ async def test_next_opens_reply_immediately_and_success_updates_both_sides(env):
     await env.message(CLIENT, "Ошибка на последнем шаге")
     await env.message(ADMIN, "/next")
     prompt = last(env, ADMIN)
-    assert prompt["reply_markup"]["force_reply"] is True
+    assert env.store.focused_ticket(ADMIN).id == ticket.id
+    assert "Пока не" not in prompt["text"]
     assert f"{ticket.id:04d}" in prompt["text"]
     assert "Клиент 101" in prompt["text"] and "Ошибка на последнем шаге" in prompt["text"]
     prompt_id, target_id = reply_target(env)
@@ -96,7 +97,7 @@ async def test_skip_releases_current_and_opens_next_eligible_ticket(env):
     assert reply_target(env)[1] == first.id
     await env.callback(ADMIN, f"a:next:{first.id}")
     assert reply_target(env)[1] == second.id
-    assert last(env, ADMIN)["reply_markup"]["force_reply"] is True
+    assert env.store.focused_ticket(ADMIN).id == second.id
     assert env.store.claim_owner(first.id) is None
     assert env.store.claim_owner(second.id) == ADMIN
     # Repeated /next resumes this operator's current work instead of silently changing recipient.
@@ -180,7 +181,7 @@ async def test_old_notification_cannot_send_a_second_operators_stale_reply(env):
 
     # Deliberately reopen the current request to see fresh context before following up.
     await env.callback(SECOND_ADMIN, f"a:reply:{ticket.id}")
-    assert last(env, SECOND_ADMIN)["reply_markup"]["force_reply"] is True
+    assert env.store.focused_ticket(SECOND_ADMIN).id == ticket.id
     fresh_prompt, target = reply_target(env, SECOND_ADMIN)
     assert fresh_prompt != second_notification and target == ticket.id
     await env.message(SECOND_ADMIN, "Осознанное дополнение после просмотра", reply_to=fresh_prompt)
@@ -208,19 +209,18 @@ async def test_failed_delivery_keeps_operator_turn_and_claim(env, error, state):
     assert ui.admin_status("waiting_user") not in last(env, ADMIN)["text"]
 
 
-async def test_client_ticket_is_compact_and_extra_actions_live_in_details(env):
+async def test_client_ticket_and_retired_details_share_one_simple_action(env):
     ticket = await order(env)
     screen = last(env, CLIENT)
     data = callbacks(screen)
-    assert len(buttons(screen)) == 2
+    assert len(buttons(screen)) == 1
     assert len(screen["text"]) <= 450
-    assert f"c:details:{ticket.id}" in data
-    assert not any(value.startswith(("c:pay:", "c:cancel:", "c:write:")) for value in data)
+    assert f"c:write:{ticket.id}" in data
+    assert not any(value.startswith(("c:pay:", "c:cancel:", "c:details:")) for value in data)
     await env.callback(CLIENT, f"c:details:{ticket.id}")
-    assert f"c:history:{ticket.id}:0" in callbacks(last(env, CLIENT))
-    assert f"c:pay:{ticket.id}" not in callbacks(last(env, CLIENT))
-    assert any(value.startswith(f"c:cancel:{ticket.id}:") for value in callbacks(last(env, CLIENT)))
-    assert f"c:view:{ticket.id}" in callbacks(last(env, CLIENT))
+    assert callbacks(last(env, CLIENT)) == [f"c:write:{ticket.id}"]
+    await env.message(CLIENT, "/cancel")
+    assert any(v.startswith(f"c:close:{ticket.id}:") for v in callbacks(last(env, CLIENT)))
     # A customer cannot use another person's details screen to read their request.
     await env.callback(OTHER, f"c:details:{ticket.id}")
     assert "Клиент 101" not in last(env, OTHER)["text"]

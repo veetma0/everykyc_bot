@@ -153,8 +153,21 @@ async def env(store, tmp_path):
         )
         await app.process_update(update)
 
+    async def confirm_draft(uid):
+        draft = store.draft(uid)
+        assert draft is not None
+        prefix = "a" if draft["kind"] == "operator" else "c"
+        await callback(uid, f"{prefix}:send_draft:{draft['ticket_id']}:{draft['token']}")
+
+    async def proof(uid, text=None, **kwargs):
+        await message(uid, text, **kwargs)
+        draft = store.draft(uid)
+        assert draft is not None and draft["kind"] == "proof"
+        await confirm_draft(uid)
+
     result = SimpleNamespace(
-        store=store, app=app, request=request, message=message, callback=callback, errors=errors
+        store=store, app=app, request=request, message=message, callback=callback, errors=errors,
+        proof=proof, confirm_draft=confirm_draft,
     )
     yield result
     await app.shutdown()

@@ -64,13 +64,13 @@ async def test_repeated_create_does_not_duplicate(env):
     assert len(texts(env, ADMIN)) == calls
 
 
-async def test_operator_cannot_send_to_implicit_previous_customer(env):
+async def test_plain_operator_input_requires_confirmation_for_selected_customer(env):
     ticket = await create(env)
     await env.callback(ADMIN, f"a:reply:{ticket.id}")
     await env.message(ADMIN, "Случайный текст без Reply")
     assert not any("Случайный" in text for text in texts(env, CLIENT))
-    assert "не отправлено" in texts(env, ADMIN)[-1]
-    assert "a:home" in callbacks(last(env, ADMIN))
+    assert "Пока не отправлено" in texts(env, ADMIN)[-1]
+    assert any(v.startswith("a:discard_draft:") for v in callbacks(last(env, ADMIN)))
 
 
 async def test_reply_to_notification_routes_to_correct_client(env):
@@ -282,7 +282,7 @@ async def test_live_setup_refuses_to_replace_existing_webhook(env):
 async def test_emoji_history_fits_telegram_limit_and_opens_full_message(env):
     ticket = await create(env)
     for number in range(4):
-        await env.message(CLIENT, "🙂" * 500, message_id=800 + number)
+        await env.message(CLIENT, "Вопрос " + "🙂" * 500, message_id=800 + number)
     await env.callback(CLIENT, f"c:history:{ticket.id}:0")
     from verifydesk.ui import text_units
 
@@ -300,7 +300,7 @@ async def test_emoji_history_fits_telegram_limit_and_opens_full_message(env):
 
 async def test_admin_start_opens_operator_cabinet_and_sets_private_commands(env):
     await env.message(ADMIN, "/start")
-    assert "Кабинет оператора" in texts(env, ADMIN)[-1]
+    assert "Заказы" in texts(env, ADMIN)[-1]
     command_calls = [params for method, params in env.request.calls if method == "setMyCommands"]
     assert command_calls[-1]["scope"]["chat_id"] == ADMIN
     assert command_calls[-1]["commands"][0]["command"] == "admin"
