@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import time
@@ -1256,6 +1257,18 @@ class Desk:
                 ),
             )
 
+    async def sync_profile(self, bot):
+        fields = (
+            ("name", catalog.PROFILE_NAME, bot.get_my_name, bot.set_my_name),
+            ("short_description", catalog.SHORT_DESCRIPTION, bot.get_my_short_description, bot.set_my_short_description),
+            ("description", catalog.DESCRIPTION, bot.get_my_description, bot.set_my_description),
+        )
+        for language in ("", "ru"):
+            for attribute, expected, read, write in fields:
+                current = await read(language_code=language)
+                if getattr(current, attribute) != expected:
+                    await write(expected, language_code=language)
+
     async def post_init(self, application):
         webhook = await application.bot.get_webhook_info()
         if webhook.url:
@@ -1271,10 +1284,11 @@ class Desk:
                 )
             except TelegramError:
                 log.warning("Оператору нужно открыть чат с ботом и нажать Start.")
-        for language in ("", "ru"):
-            await application.bot.set_my_name(catalog.PROFILE_NAME, language_code=language)
-            await application.bot.set_my_short_description(catalog.SHORT_DESCRIPTION, language_code=language)
-            await application.bot.set_my_description(catalog.DESCRIPTION, language_code=language)
+        try:
+            # Profile rate limits must not delay accepting orders after a restart.
+            await asyncio.wait_for(self.sync_profile(application.bot), timeout=15)
+        except (TelegramError, TimeoutError) as exc:
+            log.warning("Профиль пока не обновлён; бот продолжает запуск: %s", type(exc).__name__)
         log.info("Бот запущен: @%s", application.bot.username)
 
 

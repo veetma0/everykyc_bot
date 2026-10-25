@@ -7,6 +7,7 @@ from telegram import Update
 from telegram.request import BaseRequest
 
 from verifydesk.bot import build_application
+from verifydesk import catalog
 from verifydesk.config import Config
 from verifydesk.store import Store
 
@@ -42,6 +43,12 @@ class FakeTelegram(BaseRequest):
         self.calls.append((name, params))
         if name == "getMe":
             result = BOT_USER
+        elif name == "getMyName":
+            result = {"name": catalog.PROFILE_NAME}
+        elif name == "getMyShortDescription":
+            result = {"short_description": catalog.SHORT_DESCRIPTION}
+        elif name == "getMyDescription":
+            result = {"description": catalog.DESCRIPTION}
         elif name == "getWebhookInfo":
             result = {
                 "url": "https://example.org" if self.webhook else "",
