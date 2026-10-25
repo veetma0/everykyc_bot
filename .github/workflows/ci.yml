@@ -1,0 +1,65 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m ruff check .
+      - run: python -m pytest -q
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build --tag everykyc:ci .
+      - name: Check non-root container without network access
+        run: |
+          docker run --rm --network none --read-only \
+            --tmpfs /app/data:rw,uid=10001,gid=10001,mode=700 \
+            -e BOT_TOKEN=123456:abcdefghijklmnopqrstuvwxyz0123456789ABCDE \
+            -e ADMIN_IDS=9001 \
+            --mount type=bind,src="$PWD/scripts/container_smoke.py",dst=/app/smoke.py,readonly \
+            everykyc:ci python /app/smoke.py
+      - name: Check Railway volume persistence across containers
+        run: |
+          smoke_volume="everykyc-ci-${{ github.run_id }}-${{ github.run_attempt }}"
+          docker volume create "$smoke_volume"
+          trap 'docker volume rm "$smoke_volume" >/dev/null' EXIT
+          for smoke_mode in write read; do
+            docker run --rm --network none --read-only --user 0 \
+              --mount type=volume,src="$smoke_volume",dst=/app/data \
+              --mount type=bind,src="$PWD/scripts/container_smoke.py",dst=/app/smoke.py,readonly \
+              -e BOT_TOKEN=123456:abcdefghijklmnopqrstuvwxyz0123456789ABCDE \
+              -e ADMIN_IDS=9001 -e RAILWAY_SERVICE_ID=ci \
+              -e RAILWAY_VOLUME_MOUNT_PATH=/app/data \
+              everykyc:ci python /app/smoke.py --mode "$smoke_mode"
+          done

@@ -1,0 +1,17 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      DATA_DIR: /app/data
+    restart: unless-stopped
+    stop_grace_period: 20s
+    volumes:
+      - bot_data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+volumes:
+  bot_data:

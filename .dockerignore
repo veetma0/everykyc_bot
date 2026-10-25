@@ -1,0 +1,8 @@
+**
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!verifydesk/
+!verifydesk/**
+**/__pycache__/
+**/*.pyc
