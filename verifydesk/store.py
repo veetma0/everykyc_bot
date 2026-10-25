@@ -14,11 +14,12 @@ OPEN_STATUSES = ("new", "in_progress", "waiting_user")
 QUEUE_STATUSES = ("new", "in_progress")
 CLAIM_SECONDS = 15 * 60
 STATUS_NAMES = {
-    "new": "🟠 Ждёт оператора",
-    "in_progress": "🔵 В работе",
-    "waiting_user": "🟣 Нужен ваш ответ",
-    "resolved": "✅ Помощь завершена",
-    "cancelled": "Закрыта",
+    "new": "⏳ Ожидает оператора",
+    "in_progress": "🛠 В работе",
+    # Waiting for a reply changes queue eligibility, not the order's work stage.
+    "waiting_user": "🛠 В работе",
+    "resolved": "✅ Заказ выполнен",
+    "cancelled": "❌ Заказ отменён",
 }
 TRANSITIONS = {
     "new": {"in_progress", "waiting_user", "resolved", "cancelled"},
@@ -50,6 +51,17 @@ class Ticket:
     price_usd: str | None = None
     demo_network: str | None = None
     waiting_since: float = 0
+    payment_stage: str = "legacy"
+
+
+def ticket_status(ticket: Ticket) -> str:
+    """One customer-facing status, including the payment steps before work begins."""
+    if ticket.status == "new":
+        if ticket.payment_stage == "awaiting_payment":
+            return "💳 Ожидает оплаты"
+        if ticket.payment_stage == "review":
+            return "🔎 Проверяем оплату"
+    return STATUS_NAMES[ticket.status]
 
 
 @dataclass(frozen=True)
@@ -101,6 +113,13 @@ class Store:
                 UNIQUE(source_chat, source_message)
             );
             CREATE INDEX IF NOT EXISTS ticket_messages ON messages(ticket_id, id);
+            CREATE TABLE IF NOT EXISTS payment_proofs (
+                message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                file_id TEXT,
+                file_kind TEXT CHECK(file_kind IN ('photo','document')),
+                CHECK((file_id IS NULL AND file_kind IS NULL)
+                    OR (file_id IS NOT NULL AND file_kind IS NOT NULL))
+            );
             CREATE TABLE IF NOT EXISTS reply_targets (
                 chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
                 ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
@@ -154,6 +173,7 @@ class Store:
                 "price_usd": "TEXT",
                 "demo_network": "TEXT",
                 "waiting_since": "REAL NOT NULL DEFAULT 0",
+                "payment_stage": "TEXT NOT NULL DEFAULT 'legacy'",
             },
             "reply_targets": {
                 "delivered_operator_id": "INTEGER NOT NULL DEFAULT 0",
@@ -234,6 +254,7 @@ class Store:
         row = self.db.execute(
             """SELECT t.id,t.user_id,u.chat_id,u.display_name,u.username,t.status,
             t.version,t.created_at,t.updated_at,t.service_code,t.plan_code,t.price_usd,t.demo_network,t.waiting_since,
+            t.payment_stage,
             (SELECT COUNT(*) FROM messages m WHERE m.ticket_id=t.id AND m.role='user' AND m.id>t.last_read_id) unread
             FROM tickets t JOIN users u ON u.id=t.user_id WHERE t.id=?""",
             (ticket_id,),
@@ -292,8 +313,9 @@ class Store:
                 return current, False
             now = time.time()
             cursor = self.db.execute(
-                """INSERT INTO tickets(user_id,status,created_at,updated_at,consent_at,service_code,plan_code,price_usd,waiting_since)
-                VALUES(?,'new',?,?,?,?,?,?,?)""",
+                """INSERT INTO tickets(user_id,status,created_at,updated_at,consent_at,service_code,
+                plan_code,price_usd,waiting_since,payment_stage)
+                VALUES(?,'new',?,?,?,?,?,?,?,'not_requested')""",
                 (user_id, now, now, now, service_code, plan_code, price_usd, now),
             )
             self.db.execute(
@@ -306,7 +328,7 @@ class Store:
                 VALUES(?,'system',?,?,?)""",
                 (
                     cursor.lastrowid,
-                    "Заявка создана. Пользователь подтвердил проверку своего аккаунта на собственные данные.",
+                    "Заказ создан. Пользователь подтвердил проверку своего аккаунта на собственные данные.",
                     user_id,
                     now,
                 ),
@@ -430,6 +452,7 @@ class Store:
             self._positive_id(operator_id)
         return self.db.execute(
             """SELECT COUNT(*) FROM tickets t WHERE t.status IN ('new','in_progress')
+            AND t.payment_stage<>'awaiting_payment'
             AND NOT EXISTS (
                 SELECT 1 FROM operator_claims c WHERE c.ticket_id=t.id AND c.expires_at>?
                 AND (? IS NULL OR c.operator_id<>?)
@@ -445,7 +468,8 @@ class Store:
             raise ValueError("Некорректная страница очереди.")
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
             raise ValueError("Некорректный размер страницы очереди.")
-        predicate = """t.status IN ('new','in_progress') AND NOT EXISTS (
+        predicate = """t.status IN ('new','in_progress') AND t.payment_stage<>'awaiting_payment'
+        AND NOT EXISTS (
             SELECT 1 FROM operator_claims c WHERE c.ticket_id=t.id
             AND c.expires_at>? AND c.operator_id<>?
         )"""
@@ -512,7 +536,8 @@ class Store:
             else:
                 current = self.db.execute(
                     """SELECT c.ticket_id FROM operator_claims c JOIN tickets t ON t.id=c.ticket_id
-                    WHERE c.operator_id=? AND t.status IN ('new','in_progress')""",
+                    WHERE c.operator_id=? AND t.status IN ('new','in_progress')
+                    AND t.payment_stage<>'awaiting_payment'""",
                     (operator_id,),
                 ).fetchone()
                 if current:
@@ -523,6 +548,7 @@ class Store:
                     return self.ticket(current["ticket_id"])
             row = self.db.execute(
                 """SELECT t.id FROM tickets t WHERE t.status IN ('new','in_progress')
+                AND t.payment_stage<>'awaiting_payment'
                 AND (? IS NULL OR t.id<>?)
                 AND NOT EXISTS (SELECT 1 FROM operator_claims c WHERE c.ticket_id=t.id)
                 ORDER BY t.waiting_since,t.id LIMIT 1""",
@@ -549,10 +575,16 @@ class Store:
         return bool(changed)
 
     def set_status(self, ticket_id: int, version: int, status: str, actor_id: int) -> Ticket:
-        with self.transaction():
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
             ticket = self.ticket(ticket_id)
             if not ticket or ticket.version != version or status not in TRANSITIONS[ticket.status]:
                 raise StaleTicket("Заявка уже изменилась. Откройте актуальную карточку.")
+            if ticket.payment_stage not in {"legacy", "confirmed"} and status != "cancelled":
+                raise StaleTicket("Сначала подтвердите оплату заказа после проверки.")
+            # A customer may cancel their own order even while an operator has it open.
+            if not (status == "cancelled" and actor_id == ticket.user_id):
+                self._check_claim_actor(ticket_id, actor_id)
             now = time.time()
             self.db.execute(
                 """UPDATE tickets SET status=?,version=version+1,updated_at=?,
@@ -566,6 +598,125 @@ class Store:
                 "INSERT INTO messages(ticket_id,role,body,actor_id,created_at) VALUES(?,'system',?,?,?)",
                 (ticket_id, f"Статус: {STATUS_NAMES[status]}", actor_id, now),
             )
+            return self.ticket(ticket_id)
+
+    def _check_claim_actor(self, ticket_id: int, actor_id: int):
+        self._positive_id(actor_id)
+        owner = self.claim_owner(ticket_id)
+        if owner is not None and owner != actor_id:
+            raise StaleTicket("Заказ уже открыт другим оператором. Откройте актуальную карточку.")
+
+    def _payment_ticket(self, ticket_id: int, version: int, actor_id: int, stage: str) -> Ticket:
+        """Validate a payment operation while its caller holds the write transaction."""
+        ticket = self.ticket(ticket_id)
+        if (
+            not ticket or ticket.version != version
+            or ticket.status != "new" or ticket.payment_stage != stage
+        ):
+            raise StaleTicket("Заказ уже изменился. Откройте актуальную карточку.")
+        self._check_claim_actor(ticket_id, actor_id)
+        return ticket
+
+    def _payment_event(self, ticket_id: int, body: str, actor_id: int, now: float):
+        self.db.execute(
+            "INSERT INTO messages(ticket_id,role,body,actor_id,created_at) VALUES(?,'system',?,?,?)",
+            (ticket_id, body, actor_id, now),
+        )
+
+    def request_payment(self, ticket_id: int, version: int, actor_id: int) -> Ticket:
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            self._payment_ticket(ticket_id, version, actor_id, "not_requested")
+            now = time.time()
+            self.db.execute(
+                "UPDATE tickets SET payment_stage='awaiting_payment',version=version+1,updated_at=? WHERE id=?",
+                (now, ticket_id),
+            )
+            self.db.execute("DELETE FROM operator_claims WHERE ticket_id=?", (ticket_id,))
+            self._payment_event(ticket_id, "💳 Ожидает оплаты. Оператор принял заказ.", actor_id, now)
+            return self.ticket(ticket_id)
+
+    def submit_payment_proof(
+        self, ticket_id: int, body: str, actor_id: int, chat_id: int, message_id: int,
+        file_id: str | None = None, file_kind: str | None = None,
+    ) -> tuple[int, bool]:
+        self._positive_id(actor_id)
+        self._positive_id(message_id)
+        if not isinstance(body, str) or (not body.strip() and file_id is None):
+            raise ValueError("Добавьте подтверждение оплаты.")
+        if file_id is None:
+            if file_kind is not None:
+                raise ValueError("Не найден файл подтверждения.")
+        elif not isinstance(file_id, str) or not file_id.strip() or file_kind not in {"photo", "document"}:
+            raise ValueError("Неподдерживаемый файл подтверждения.")
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            ticket = self.ticket(ticket_id)
+            if not ticket or ticket.user_id != actor_id or ticket.chat_id != chat_id:
+                raise StaleTicket("Этот заказ недоступен.")
+            previous = self.find_source(chat_id, message_id)
+            if previous:
+                proof = self.db.execute(
+                    "SELECT message_id FROM payment_proofs WHERE message_id=?", (previous["id"],)
+                ).fetchone()
+                if previous["ticket_id"] != ticket_id or previous["actor_id"] != actor_id or not proof:
+                    raise StaleTicket("Это сообщение уже сохранено. Пришлите новое подтверждение.")
+                return previous["id"], False
+            if ticket.status != "new" or ticket.payment_stage not in {"awaiting_payment", "review"}:
+                raise StaleTicket("Сейчас подтверждение оплаты для этого заказа не требуется.")
+            now = time.time()
+            cursor = self.db.execute(
+                """INSERT INTO messages(ticket_id,role,body,actor_id,source_chat,source_message,created_at)
+                VALUES(?,'user',?,?,?,?,?)""",
+                (ticket_id, body, actor_id, chat_id, message_id, now),
+            )
+            self.db.execute(
+                "INSERT INTO payment_proofs(message_id,file_id,file_kind) VALUES(?,?,?)",
+                (cursor.lastrowid, file_id, file_kind),
+            )
+            self.db.execute(
+                """UPDATE tickets SET payment_stage='review',version=version+1,updated_at=?,
+                waiting_since=CASE WHEN payment_stage='awaiting_payment' THEN ? ELSE waiting_since END
+                WHERE id=?""",
+                (now, now, ticket_id),
+            )
+            if ticket.payment_stage == "awaiting_payment":
+                self._payment_event(ticket_id, "🔎 Подтверждение оплаты получено. Ожидает проверки.", actor_id, now)
+            return cursor.lastrowid, True
+
+    def payment_proofs(self, ticket_id: int):
+        return self.db.execute(
+            """SELECT m.*,p.message_id,p.file_id,p.file_kind FROM payment_proofs p
+            JOIN messages m ON m.id=p.message_id WHERE m.ticket_id=? ORDER BY m.id DESC""",
+            (ticket_id,),
+        ).fetchall()
+
+    def confirm_payment(self, ticket_id: int, version: int, actor_id: int) -> Ticket:
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            self._payment_ticket(ticket_id, version, actor_id, "review")
+            if not self.payment_proofs(ticket_id):
+                raise StaleTicket("Подтверждение оплаты ещё не получено.")
+            now = time.time()
+            self.db.execute(
+                """UPDATE tickets SET payment_stage='confirmed',status='in_progress',
+                version=version+1,updated_at=? WHERE id=?""",
+                (now, ticket_id),
+            )
+            self._payment_event(ticket_id, "✅ Оплата подтверждена оператором. 🛠 В работе.", actor_id, now)
+            return self.ticket(ticket_id)
+
+    def reject_payment(self, ticket_id: int, version: int, actor_id: int) -> Ticket:
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            self._payment_ticket(ticket_id, version, actor_id, "review")
+            now = time.time()
+            self.db.execute(
+                "UPDATE tickets SET payment_stage='awaiting_payment',version=version+1,updated_at=? WHERE id=?",
+                (now, ticket_id),
+            )
+            self.db.execute("DELETE FROM operator_claims WHERE ticket_id=?", (ticket_id,))
+            self._payment_event(ticket_id, "💳 Оплата не подтверждена. Нужно новое подтверждение.", actor_id, now)
             return self.ticket(ticket_id)
 
     def find_source(self, chat_id: int, message_id: int):
@@ -634,6 +785,7 @@ class Store:
                 changed = self.db.execute(
                     """UPDATE tickets SET status='waiting_user',version=version+1,updated_at=?
                     WHERE id=? AND status IN ('new','in_progress')
+                    AND payment_stage IN ('legacy','confirmed')
                     AND NOT EXISTS (
                         SELECT 1 FROM messages m WHERE m.ticket_id=tickets.id
                         AND m.role='user' AND m.id>?

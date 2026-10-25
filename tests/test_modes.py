@@ -32,6 +32,7 @@ def latest_prompt(env, kind):
 async def test_same_admin_can_complete_real_client_flow_then_answer_as_operator(env):
     await env.message(ADMIN, '/start')
     assert env.store.operator_mode(ADMIN) == 'admin'
+    await press(env, 'a:more')
     await press(env, 'a:mode:client')
     assert env.store.operator_mode(ADMIN) == 'client'
     assert 'a:mode:admin' in callbacks(last(env, ADMIN))
@@ -53,20 +54,22 @@ async def test_same_admin_can_complete_real_client_flow_then_answer_as_operator(
     assert len(sent(env, ADMIN)) == before + 1
     await press(env, f'c:view:{ticket.id}')
     await press(env, f'c:details:{ticket.id}')
-    await press(env, f'c:pay:{ticket.id}')
-    assert 'ДЕМО' in last(env, ADMIN)['text']
-    before_payment = env.store.ticket(ticket.id)
-    await press(env, f'c:network:{ticket.id}:usdt_ton')
-    selected = env.store.ticket(ticket.id)
-    assert selected.demo_network == 'usdt_ton'
-    assert (selected.status, selected.version, selected.price_usd) == (
-        before_payment.status, before_payment.version, before_payment.price_usd
-    )
+    assert not any(value.startswith("c:pay:") for value in callbacks(last(env, ADMIN)))
     await press(env, 'a:mode:admin')
     assert env.store.operator_mode(ADMIN) == 'admin'
     await press(env, 'a:list:active:0')
     await press(env, f'a:view:{ticket.id}')
     assert 'На шаге проверки' in last(env, ADMIN)['text']
+    current = env.store.ticket(ticket.id)
+    await press(env, f'a:request_payment:{ticket.id}:{current.version}')
+    await env.message(ADMIN, '/client')
+    await env.message(ADMIN, 'https://example.org/mock-payment')
+    assert env.store.ticket(ticket.id).payment_stage == 'review'
+    await env.message(ADMIN, '/admin')
+    await press(env, 'a:next')
+    current = env.store.ticket(ticket.id)
+    await press(env, f'a:confirm_payment:{ticket.id}:{current.version}')
+    assert env.store.ticket(ticket.id).payment_stage == 'confirmed'
     await press(env, f'a:reply:{ticket.id}')
     await env.message(ADMIN, 'Уточните текст ошибки', reply_to=latest_prompt(env, 'reply_targets'))
     assert env.store.ticket(ticket.id).status == 'waiting_user'
@@ -75,7 +78,7 @@ async def test_same_admin_can_complete_real_client_flow_then_answer_as_operator(
     await env.message(ADMIN, '/client')
     await env.message(ADMIN, 'Пишет, что ссылка истекла')
     assert env.store.ticket(ticket.id).status == 'in_progress'
-    assert len(user_rows(env, ticket.id)) == 2
+    assert len(user_rows(env, ticket.id)) == 3  # Includes the submitted payment proof.
     await env.message(ADMIN, '/admin')
     await env.callback(ADMIN, f'a:status:{ticket.id}')
     version = env.store.ticket(ticket.id).version
@@ -101,6 +104,8 @@ async def test_mode_survives_database_reopen_and_start_respects_it(env):
     assert env.store.operator_mode(ADMIN) == 'admin'
     await env.message(ADMIN, '/start')
     assert 'a:list:active:0' in callbacks(last(env, ADMIN))
+    assert 'a:more' in callbacks(last(env, ADMIN))
+    await press(env, 'a:more')
     assert 'a:mode:client' in callbacks(last(env, ADMIN))
 
 
@@ -188,7 +193,7 @@ async def test_customer_home_is_short_and_claude_geography_is_one_level_deeper(e
     home = last(env, CLIENT)
     assert 'c:service:claude' in callbacks(home)
     assert not any(value.startswith('c:offer:claude:') for value in callbacks(home))
-    assert len(buttons(home)) <= 6
+    assert len(buttons(home)) == 2
     assert '$' not in home['text']
     await env.callback(CLIENT, 'c:service:claude')
     geography = callbacks(last(env, CLIENT))
@@ -237,6 +242,6 @@ async def test_startup_restores_command_menu_for_persisted_client_mode(env):
     scoped = [params for method, params in env.request.calls
               if method == 'setMyCommands' and params.get('scope', {}).get('chat_id') == ADMIN]
     commands = {item['command'] for item in scoped[-1]['commands']}
-    assert {'start', 'admin', 'services', 'profile'} <= commands
+    assert commands == {'start', 'status', 'profile', 'help', 'admin'}
     assert 'clients' not in commands
     assert env.store.operator_mode(ADMIN) == 'client'

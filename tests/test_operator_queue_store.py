@@ -11,7 +11,11 @@ from verifydesk.store import CLAIM_SECONDS, Store
 
 def new_ticket(store, uid):
     store.remember_user(uid, uid, f"Client {uid}", None)
-    return store.create_ticket(uid, "claude", "armenia", "35.00")[0]
+    ticket = store.create_ticket(uid, "claude", "armenia", "35.00")[0]
+    # This suite covers the existing reply queue; payment stages have their own suite.
+    with store.db:
+        store.db.execute("UPDATE tickets SET payment_stage='legacy' WHERE id=?", (ticket.id,))
+    return store.ticket(ticket.id)
 
 
 def test_queue_age_tracks_unanswered_turn_not_latest_message(store, monkeypatch):
@@ -69,9 +73,10 @@ def test_explicit_followup_allowed_but_waiting_and_closed_not_queued(store):
     first = store.set_status(first.id, first.version, "waiting_user", 42)
     assert store.queue_count() == 1
     assert store.claim_ticket(first.id, 42)  # A deliberate follow-up may continue this chat.
-    assert store.claim_next(42).id == second.id
+    claimed = store.claim_next(42)
+    assert claimed.id == second.id
     assert store.claim_owner(first.id) is None
-    closed = store.set_status(second.id, second.version, "resolved", 42)
+    closed = store.set_status(claimed.id, claimed.version, "resolved", 42)
     assert store.claim_owner(closed.id) is None
     assert not store.claim_ticket(closed.id, 43)
     assert not store.claim_ticket(999999, 43)
@@ -167,11 +172,13 @@ def test_existing_database_migrates_without_changing_records(tmp_path):
     assert (before.status, before.version, before.created_at, before.updated_at, before.waiting_since) == (
         "new", 1, 123, 456, 123
     )
-    assert current.claim_next(42).id == 1
+    claimed = current.claim_next(42)
+    assert claimed == before
+    assert claimed.payment_stage == "legacy"
     current.close()
     reopened = Store(path)
     try:
-        assert reopened.ticket(1) == before
+        assert reopened.ticket(1) == claimed
         assert reopened.claim_owner(1) == 42
     finally:
         reopened.close()

@@ -48,7 +48,7 @@ class FakeTelegram(BaseRequest):
                 "has_custom_certificate": False,
                 "pending_update_count": 0,
             }
-        elif name in {"sendMessage", "editMessageText"}:
+        elif name in {"sendMessage", "editMessageText", "sendPhoto", "sendDocument"}:
             if self.fail_chat == params["chat_id"] and self.fail_error:
                 raise self.fail_error
             result = {
@@ -56,7 +56,7 @@ class FakeTelegram(BaseRequest):
                 "date": 1700000000,
                 "chat": {"id": params["chat_id"], "type": "private", "first_name": "Test"},
                 "from": BOT_USER,
-                "text": params["text"],
+                "text": params.get("text", params.get("caption", "")),
             }
             if "inline_keyboard" in params.get("reply_markup", {}):
                 result["reply_markup"] = params["reply_markup"]
@@ -87,7 +87,8 @@ async def env(store, tmp_path):
     ids = count(1)
 
     async def message(
-        uid, text=None, reply_to=None, photo=False, edited=False, message_id=None, chat_type="private"
+        uid, text=None, reply_to=None, photo=False, edited=False, message_id=None, chat_type="private",
+        caption=None, document=None,
     ):
         user = {"id": uid, "is_bot": False, "first_name": f"Клиент {uid}", "username": f"user{uid}"}
         number = next(ids)
@@ -113,6 +114,10 @@ async def env(store, tmp_path):
             data["photo"] = [
                 {"file_id": "secret_document", "file_unique_id": "unique", "width": 400, "height": 400}
             ]
+        if caption is not None:
+            data["caption"] = caption
+        if document is not None:
+            data["document"] = document
         update = Update.de_json(
             {"update_id": number, "edited_message" if edited else "message": data}, app.bot
         )

@@ -2,6 +2,7 @@ from telegram.error import Forbidden, TimedOut
 
 from .conftest import ADMIN, CLIENT, OTHER
 from .test_upgrade import callbacks, last
+from .payment_helpers import legacy_ticket
 
 
 def texts(env, chat=None):
@@ -17,7 +18,7 @@ async def create(env, uid=CLIENT):
     return env.store.for_user(uid)
 
 
-async def test_full_customer_operator_flow(env):
+async def test_legacy_customer_operator_flow(env):
     await env.message(CLIENT, "/start")
     assert "Эврикус" in texts(env, CLIENT)[-1]
     assert "c:service:claude" in callbacks(last(env, CLIENT))
@@ -25,6 +26,7 @@ async def test_full_customer_operator_flow(env):
     assert "c:service:claude" in callbacks(last(env, CLIENT))
     assert "c:create" not in callbacks(last(env, CLIENT))
     ticket = await create(env)
+    ticket = legacy_ticket(env.store, ticket)
     assert ticket.status == "new"
     await env.message(CLIENT, "Не могу открыть проверку")
     assert env.store.ticket(ticket.id).unread == 1
@@ -43,7 +45,7 @@ async def test_full_customer_operator_flow(env):
     assert env.store.for_user(CLIENT).status == "in_progress"  # confirmation required
     await env.callback(ADMIN, f"a:confirm:{ticket.id}:{current.version}:resolved")
     assert env.store.for_user(CLIENT).status == "resolved"
-    assert "Помощь завершена" in texts(env, CLIENT)[-1]
+    assert "Заказ выполнен" in texts(env, CLIENT)[-1]
 
 
 async def test_plain_text_requires_consent_and_ticket(env):
@@ -126,6 +128,7 @@ async def test_full_message_must_belong_to_the_ticket(env):
 
 async def test_stale_close_does_not_overwrite_status(env):
     ticket = await create(env)
+    legacy_ticket(env.store, ticket)
     env.store.set_status(ticket.id, ticket.version, "resolved", ADMIN)
     await env.callback(CLIENT, f"c:close:{ticket.id}:{ticket.version}")
     assert env.store.ticket(ticket.id).status == "resolved"

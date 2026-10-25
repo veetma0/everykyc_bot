@@ -6,6 +6,7 @@ from verifydesk import catalog
 
 from .conftest import ADMIN, CLIENT
 from .test_upgrade import callbacks, last, sent
+from .payment_helpers import legacy_ticket
 
 
 DISABLED_SERVICES = ("alipay", "chatgpt", "gemini")
@@ -63,6 +64,7 @@ async def test_historical_alipay_ticket_and_messages_survive_new_catalog(env, st
     env.store.add_message(ticket.id, "user", "История прежней заявки", CLIENT, CLIENT, 901)
     ticket = env.store.ticket(ticket.id)
     if status != ticket.status:
+        legacy_ticket(env.store, ticket)
         ticket = env.store.set_status(ticket.id, ticket.version, status, ADMIN)
     before_tickets, before_messages = ticket_rows(env), message_rows(env)
 

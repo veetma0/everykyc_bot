@@ -11,6 +11,7 @@ from verifydesk.store import STATUS_NAMES
 
 from .conftest import ADMIN, CLIENT, OTHER
 from .test_upgrade import buttons, callbacks, last, order, sent
+from .payment_helpers import legacy_order
 
 
 SECOND_ADMIN = 9002
@@ -31,7 +32,7 @@ def allow_second_operator(env):
 
 
 async def test_next_opens_reply_immediately_and_success_updates_both_sides(env):
-    ticket = await order(env)
+    ticket = await legacy_order(env)
     await env.message(CLIENT, "Ошибка на последнем шаге")
     await env.message(ADMIN, "/next")
     prompt = last(env, ADMIN)
@@ -57,7 +58,7 @@ async def test_next_opens_reply_immediately_and_success_updates_both_sides(env):
 
 
 async def test_reply_to_receipt_can_continue_without_opening_ticket_again(env):
-    ticket = await order(env)
+    ticket = await legacy_order(env)
     await env.callback(ADMIN, "a:next")
     prompt_id, _ = reply_target(env)
     await env.message(ADMIN, "Первый ответ", reply_to=prompt_id)
@@ -74,10 +75,10 @@ async def test_reply_to_receipt_can_continue_without_opening_ticket_again(env):
 
 
 async def test_new_customer_notification_cannot_retarget_open_queue_reply(env):
-    first = await order(env)
+    first = await legacy_order(env)
     await env.callback(ADMIN, "a:next")
     first_prompt, _ = reply_target(env)
-    other = await order(env, uid=OTHER)
+    other = await legacy_order(env, uid=OTHER)
     await env.message(OTHER, "Второй клиент пишет во время ответа")
     before_other = len(sent(env, OTHER))
 
@@ -89,8 +90,8 @@ async def test_new_customer_notification_cannot_retarget_open_queue_reply(env):
 
 
 async def test_skip_releases_current_and_opens_next_eligible_ticket(env):
-    first = await order(env)
-    second = await order(env, uid=OTHER)
+    first = await legacy_order(env)
+    second = await legacy_order(env, uid=OTHER)
     await env.callback(ADMIN, "a:next")
     assert reply_target(env)[1] == first.id
     await env.callback(ADMIN, f"a:next:{first.id}")
@@ -104,7 +105,7 @@ async def test_skip_releases_current_and_opens_next_eligible_ticket(env):
 
 
 async def test_empty_queue_excludes_clients_whose_turn_it_is(env):
-    ticket = await order(env)
+    ticket = await legacy_order(env)
     env.store.set_status(ticket.id, ticket.version, "waiting_user", ADMIN)
     before_messages = env.store.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
     await env.callback(ADMIN, "a:next")
@@ -147,7 +148,7 @@ async def test_queue_does_not_send_operator_reply_prompt_in_customer_mode(env, e
 
 async def test_two_operators_cannot_reply_to_the_same_claimed_request(env):
     allow_second_operator(env)
-    ticket = await order(env)
+    ticket = await legacy_order(env)
     second_notification = reply_target(env, SECOND_ADMIN)[0]
     await env.callback(ADMIN, "a:next")
     assert env.store.claim_owner(ticket.id) == ADMIN
@@ -162,7 +163,7 @@ async def test_two_operators_cannot_reply_to_the_same_claimed_request(env):
 
 async def test_old_notification_cannot_send_a_second_operators_stale_reply(env):
     allow_second_operator(env)
-    ticket = await order(env)
+    ticket = await legacy_order(env)
     first_notification = reply_target(env, ADMIN)[0]
     second_notification = reply_target(env, SECOND_ADMIN)[0]
 
@@ -193,7 +194,7 @@ async def test_old_notification_cannot_send_a_second_operators_stale_reply(env):
 
 @pytest.mark.parametrize("error,state", [(TimedOut(), "uncertain"), (Forbidden("Blocked"), "failed")])
 async def test_failed_delivery_keeps_operator_turn_and_claim(env, error, state):
-    ticket = await order(env)
+    ticket = await legacy_order(env)
     await env.callback(ADMIN, "a:next")
     prompt_id, _ = reply_target(env)
     env.request.fail_chat, env.request.fail_error = CLIENT, error
@@ -211,12 +212,13 @@ async def test_client_ticket_is_compact_and_extra_actions_live_in_details(env):
     ticket = await order(env)
     screen = last(env, CLIENT)
     data = callbacks(screen)
-    assert len(buttons(screen)) <= 3
+    assert len(buttons(screen)) == 2
     assert len(screen["text"]) <= 450
     assert f"c:details:{ticket.id}" in data
     assert not any(value.startswith(("c:pay:", "c:cancel:", "c:write:")) for value in data)
     await env.callback(CLIENT, f"c:details:{ticket.id}")
-    assert f"c:pay:{ticket.id}" in callbacks(last(env, CLIENT))
+    assert f"c:history:{ticket.id}:0" in callbacks(last(env, CLIENT))
+    assert f"c:pay:{ticket.id}" not in callbacks(last(env, CLIENT))
     assert any(value.startswith(f"c:cancel:{ticket.id}:") for value in callbacks(last(env, CLIENT)))
     assert f"c:view:{ticket.id}" in callbacks(last(env, CLIENT))
     # A customer cannot use another person's details screen to read their request.

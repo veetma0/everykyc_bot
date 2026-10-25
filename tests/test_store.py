@@ -6,6 +6,7 @@ import pytest
 from verifydesk.__main__ import PrivateFormatter, SingleInstance
 from verifydesk.store import StaleTicket, Store
 from verifydesk import ui
+from .payment_helpers import legacy_ticket
 
 
 def user(store, uid=101):
@@ -32,6 +33,7 @@ def test_state_and_reply_targets_survive_restart(tmp_path):
 
 def test_closed_ticket_cannot_accept_messages_or_be_reopened(store):
     ticket = user(store)
+    legacy_ticket(store, ticket)
     closed = store.set_status(ticket.id, ticket.version, "resolved", 42)
     with pytest.raises(StaleTicket):
         store.add_message(ticket.id, "user", "Поздний текст", 101, 101, 5)

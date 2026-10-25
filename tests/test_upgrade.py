@@ -10,6 +10,7 @@ from verifydesk import catalog
 from verifydesk.store import Store
 
 from .conftest import ADMIN, CLIENT, OTHER
+from .payment_helpers import legacy_ticket
 
 
 def sent(env, uid=None):
@@ -50,7 +51,7 @@ async def test_claude_offer_shows_price_and_own_data_consent_before_one_click_or
     assert catalog.dollars(price) in offer_screen["text"]
     assert "сами на свои данные" in offer_screen["text"]
     assert "Документы — только в официальном сервисе" in offer_screen["text"]
-    assert "Создавая заявку" in offer_screen["text"] and "подтверждаете" in offer_screen["text"]
+    assert "Оформляя заказ" in offer_screen["text"] and "подтверждаете" in offer_screen["text"]
     assert "аккаунт ваш" in offer_screen["text"] and "без списаний" in offer_screen["text"].lower()
     assert f"c:order:claude:{plan}" in callbacks(offer_screen)
     assert env.store.for_user(CLIENT) is None
@@ -58,7 +59,7 @@ async def test_claude_offer_shows_price_and_own_data_consent_before_one_click_or
     assert (ticket.service_code, ticket.plan_code, ticket.price_usd) == ("claude", plan, price)
     assert ticket.status == "new"
     assert env.store.db.execute("SELECT consent_at FROM tickets WHERE id=?", (ticket.id,)).fetchone()[0] > 0
-    assert "Заявка" in last(env, CLIENT)["text"] or "заявка" in last(env, CLIENT)["text"]
+    assert "Заказ" in last(env, CLIENT)["text"] or "заказ" in last(env, CLIENT)["text"]
     assert not last(env, CLIENT).get("reply_markup", {}).get("force_reply")
 
 
@@ -78,8 +79,8 @@ async def test_customer_card_never_discloses_operator_note(env):
     env.store.set_note(CLIENT, "Секретная заметка оператора", ADMIN)
     await env.callback(CLIENT, "c:profile")
     text = last(env, CLIENT)["text"]
-    assert "Моя карточка" in text and f"{CLIENT}" in text
-    assert "Claude" in text and "заявок" in text.lower()
+    assert "Мои заказы" in text and f"{CLIENT}" in text
+    assert "Claude" in text and "заказов" in text.lower()
     assert "Секретная заметка" not in text
     assert not any(value.startswith("a:") for value in callbacks(last(env, CLIENT)))
     await env.callback(ADMIN, f"a:client:{CLIENT}")
@@ -100,6 +101,7 @@ async def test_customer_cannot_open_another_client_card_or_operator_order_list(e
 
 async def test_customer_order_history_contains_only_owned_tickets(env):
     first = await order(env)
+    legacy_ticket(env.store, first)
     env.store.set_status(first.id, first.version, "resolved", ADMIN)
     second = await order(env, plan="europe")
     other = await order(env, uid=OTHER, plan="europe")
@@ -223,7 +225,7 @@ async def test_other_customer_cannot_view_or_choose_mock_network_for_ticket(env)
         f"c:network:{ticket.id}:usdt_tron",
     ):
         await env.callback(OTHER, value)
-        assert "недоступна" in last(env, OTHER)["text"]
+        assert "недоступен" in last(env, OTHER)["text"]
         assert "$35" not in last(env, OTHER)["text"]
     assert env.store.ticket(ticket.id).demo_network is None
 
@@ -232,6 +234,7 @@ async def test_mock_selection_cannot_change_closed_ticket_or_unknown_network(env
     ticket = await order(env)
     await env.callback(CLIENT, f"c:network:{ticket.id}:not_a_network")
     assert env.store.ticket(ticket.id).demo_network is None
+    legacy_ticket(env.store, ticket)
     closed = env.store.set_status(ticket.id, ticket.version, "resolved", ADMIN)
     await env.callback(CLIENT, f"c:network:{ticket.id}:usdt_ton")
     latest = env.store.ticket(ticket.id)
@@ -322,7 +325,7 @@ async def test_help_only_offers_claude_and_keeps_official_owner_verification_gui
     assert any(button.get("url", "").startswith("https://support.claude.com/") for button in buttons(guide))
 
 
-@pytest.mark.parametrize("command,expected", [("/services", "Claude"), ("/profile", "Моя карточка")])
+@pytest.mark.parametrize("command,expected", [("/services", "Claude"), ("/profile", "Мои заказы")])
 async def test_new_customer_commands_are_registered_and_reach_the_right_screen(env, command, expected):
     await env.message(CLIENT, command)
     assert expected in last(env, CLIENT)["text"]

@@ -10,6 +10,7 @@ from verifydesk.store import Store
 
 from .conftest import ADMIN, CLIENT, OTHER
 from .test_upgrade import callbacks, last, order
+from .payment_helpers import legacy_ticket
 
 
 def attribution(env, uid):
@@ -58,6 +59,7 @@ async def test_ticket_snapshots_source_and_repeated_order_does_not_inflate_stats
     await env.message(CLIENT, "/start src_partner")
     assert ticket_source(env.store, first.id) == "src_site_alipay"
     assert env.store.source_summary()[0]["tickets"] == 1
+    legacy_ticket(env.store, first)
     env.store.set_status(first.id, first.version, "resolved", ADMIN)
     second = await order(env)
     assert ticket_source(env.store, second.id) == "src_site_alipay"
@@ -74,6 +76,7 @@ async def test_late_source_never_attributes_old_ticket_even_when_still_active(en
     assert env.store.source_summary()[0] == {
         "source_code": "src_profile", "started_users": 1, "requested_users": 0, "tickets": 0
     }
+    legacy_ticket(env.store, old)
     env.store.set_status(old.id, old.version, "resolved", ADMIN)
     new = await order(env)
     assert ticket_source(env.store, old.id) is None

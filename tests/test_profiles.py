@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 from verifydesk.store import StaleTicket, Store
+from .payment_helpers import legacy_ticket
 
 
 def legacy_database(path):
@@ -102,6 +103,7 @@ def test_profile_totals_are_for_this_user_and_actual_statuses(store):
     remember(store)
     remember(store, 102)
     first, _ = store.create_ticket(101, "claude", "armenia", "35")
+    legacy_ticket(store, first)
     store.set_status(first.id, first.version, "resolved", 42)
     second, _ = store.create_ticket(101, "alipay", "standard")
     store.set_status(second.id, second.version, "cancelled", 101)
@@ -222,6 +224,7 @@ def test_mock_network_changes_no_price_service_or_payment_status(store):
     assert not hasattr(selected, "paid")
     with pytest.raises(ValueError):
         store.set_demo_network(ticket.id, "TRC20")
+    legacy_ticket(store, ticket)
     closed = store.set_status(ticket.id, ticket.version, "resolved", 42)
     with pytest.raises(StaleTicket):
         store.set_demo_network(closed.id, "ethereum")
