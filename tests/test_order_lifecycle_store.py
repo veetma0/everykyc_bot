@@ -75,7 +75,7 @@ def test_old_status_controls_cannot_skip_payment(store, stage, status):
     assert store.ticket(order.id) == order
 
 
-@pytest.mark.parametrize("stage", ["not_requested", "awaiting_payment", "review"])
+@pytest.mark.parametrize("stage", ["not_requested", "awaiting_payment"])
 def test_unpaid_orders_can_be_cancelled_by_customer_even_when_claimed(store, stage):
     order = create_order(store)
     if stage != "not_requested":
@@ -84,7 +84,7 @@ def test_unpaid_orders_can_be_cancelled_by_customer_even_when_claimed(store, sta
         store.submit_payment_proof(order.id, "receipt", 101, 101, 1)
         order = store.ticket(order.id)
     store.claim_ticket(order.id, 42)
-    cancelled = store.set_status(order.id, order.version, "cancelled", 101)
+    cancelled = store.set_status(order.id, order.version, "cancelled", 101, customer_cancel=True)
     assert ticket_status(cancelled) == "❌ Заказ отменён"
     assert store.claim_owner(order.id) is None
     assert store.queue_count() == 0

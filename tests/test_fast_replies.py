@@ -209,16 +209,16 @@ async def test_failed_delivery_keeps_operator_turn_and_claim(env, error, state):
     assert ui.admin_status("waiting_user") not in last(env, ADMIN)["text"]
 
 
-async def test_client_ticket_and_retired_details_share_one_simple_action(env):
+async def test_client_ticket_and_retired_details_show_reply_and_unpaid_cancel(env):
     ticket = await order(env)
     screen = last(env, CLIENT)
     data = callbacks(screen)
-    assert len(buttons(screen)) == 1
+    assert len(buttons(screen)) == 2
     assert len(screen["text"]) <= 450
     assert f"c:write:{ticket.id}" in data
-    assert not any(value.startswith(("c:pay:", "c:cancel:", "c:details:")) for value in data)
+    assert not any(value.startswith(("c:pay:", "c:details:")) for value in data)
     await env.callback(CLIENT, f"c:details:{ticket.id}")
-    assert callbacks(last(env, CLIENT)) == [f"c:write:{ticket.id}"]
+    assert callbacks(last(env, CLIENT)) == [f"c:write:{ticket.id}", f"c:cancel:{ticket.id}:{ticket.version}"]
     await env.message(CLIENT, "/cancel")
     assert any(v.startswith(f"c:close:{ticket.id}:") for v in callbacks(last(env, CLIENT)))
     # A customer cannot use another person's details screen to read their request.

@@ -102,7 +102,7 @@ async def test_mode_survives_database_reopen_and_start_respects_it(env):
     assert env.store.operator_mode(ADMIN) == 'admin'
     await env.message(ADMIN, '/start')
     assert 'a:list:active:0' in callbacks(last(env, ADMIN))
-    assert len(callbacks(last(env, ADMIN))) == 2
+    assert len(callbacks(last(env, ADMIN))) == 3
     await env.message(ADMIN, '/client')
     assert env.store.operator_mode(ADMIN) == 'client'
 

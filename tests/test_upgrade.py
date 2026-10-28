@@ -161,7 +161,7 @@ async def test_retired_payment_menu_returns_to_current_order_without_extra_choic
     await env.callback(CLIENT, f"c:pay:{ticket.id}")
     screen = last(env, CLIENT)
     assert "Заказ" in screen["text"]
-    assert len(buttons(screen)) == 1
+    assert len(buttons(screen)) == 2
     assert not any(":network" in value for value in callbacks(screen))
     assert not any(method in {"sendInvoice", "createInvoiceLink"} for method, _ in env.request.calls)
 
@@ -171,7 +171,7 @@ async def test_retired_network_pages_cannot_restore_old_button_menus(env):
     for group in catalog.NETWORK_GROUPS:
         for offset in (0, 8, 16):
             await env.callback(CLIENT, f"c:networks:{ticket.id}:{group}:{offset}")
-            assert len(buttons(last(env, CLIENT))) == 1
+            assert len(buttons(last(env, CLIENT))) == 2
             assert not any(":network" in value for value in callbacks(last(env, CLIENT)))
     assert env.store.ticket(ticket.id).demo_network is None
 
@@ -183,7 +183,7 @@ async def test_retired_network_selection_is_read_only(env, network):
     ticket = env.store.ticket(initial.id)
     assert ticket == initial
     assert ticket.demo_network is None
-    assert len(callbacks(last(env, CLIENT))) == 1
+    assert len(callbacks(last(env, CLIENT))) == 2
 
 
 async def test_other_customer_cannot_view_or_choose_mock_network_for_ticket(env):

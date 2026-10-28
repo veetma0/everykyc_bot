@@ -15,17 +15,17 @@ async def payment(env):
     return env.store.ticket(ticket.id)
 
 
-async def test_customer_has_one_action_and_payment_is_readable_without_opening_menus(env):
+async def test_customer_can_reply_or_cancel_and_payment_is_readable_without_opening_menus(env):
     await env.message(CLIENT, "/start")
     assert callbacks(last(env, CLIENT)) == ["c:service:claude"]
     ticket = await order(env)
-    assert callbacks(last(env, CLIENT)) == [f"c:write:{ticket.id}"]
+    assert callbacks(last(env, CLIENT)) == [f"c:write:{ticket.id}", f"c:cancel:{ticket.id}:{ticket.version}"]
     await env.callback(ADMIN, f"a:request_payment:{ticket.id}:{ticket.version}")
     card = last(env, CLIENT)
     assert "Реальные реквизиты ещё не подключены" in card["text"]
     assert "Деньги переводить не нужно" in card["text"]
     assert "$35" in card["text"] and "DEMO-" not in card["text"]
-    assert callbacks(card) == [f"c:proof_prompt:{ticket.id}"]
+    assert callbacks(card) == [f"c:proof_prompt:{ticket.id}", f"c:cancel:{ticket.id}:{env.store.ticket(ticket.id).version}"]
 
 
 async def test_accidental_photo_is_never_forwarded_before_customer_confirms(env):
@@ -52,9 +52,9 @@ async def test_review_arrives_with_direct_decisions_and_payment_sends_wait_instr
     await env.callback(ADMIN, f"a:confirm_payment:{ticket.id}:{current.version}")
     text = last(env, CLIENT)["text"]
     assert "Оплата подтверждена" in text
-    assert "Ожидайте Фамилию и Имя от оператора" in text
-    assert "Ссылку на верификацию пока не создавайте" in text
-    assert "Строго следуйте нашей инструкции" in text
+    assert "В работе" in text
+    assert "самостоятельной проверки" in text
+    assert "Ссылку KYC, документы и коды входа сюда не отправляйте" in text
     assert callbacks(last(env, CLIENT)) == ["c:guide:claude"]
     assert len(callbacks(last(env, ADMIN))) == 3
     assert any(v.endswith(":resolved") for v in callbacks(last(env, ADMIN)))

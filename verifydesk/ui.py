@@ -4,19 +4,20 @@ from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Keyboard
 
-from .store import OPEN_STATUSES, STATUS_NAMES, TRANSITIONS, Ticket, ticket_status
+from .store import OPEN_STATUSES, STATUS_NAMES, TRANSITIONS, Ticket, can_customer_cancel, ticket_status
 from . import catalog
 
 
 HELP_URL = "https://support.claude.com/en/articles/14328960-identity-verification-on-claude"
 INSTRUCTIONS = (
     "<b>📋 Наша инструкция</b>\n\n"
-    "1. После подтверждения оплаты дождитесь Фамилии и Имени от оператора.\n"
-    "2. До этого не создавайте ссылку на верификацию и не начинайте проверку самостоятельно.\n"
-    "3. Строго следуйте нашей инструкции. Каждый следующий шаг согласуйте с оператором.\n\n"
-    "Проверку собственного аккаунта проходите на свои настоящие данные. "
-    "Документы и селфи вводите только на официальной странице Claude.\n"
-    "Не отправляйте сюда документы, ссылку проверки, пароли и коды входа."
+    "1️⃣ Дождитесь оператора — он объяснит порядок действий.\n"
+    "2️⃣ Откройте проверку в своём аккаунте Claude и проходите её самостоятельно на свои настоящие данные.\n"
+    "3️⃣ Если возникла ошибка, напишите её текст в этот чат без личных данных.\n\n"
+    "Строго следуйте нашей инструкции; вопросы уточняйте у оператора.\n\n"
+    "🔒 <b>Ссылку KYC, документы, селфи, пароли и коды входа сюда не отправляйте.</b>\n"
+    "Документы и селфи — только на официальной странице проверки.\n\n"
+    "💡 Подписку Claude вы оплачиваете самостоятельно. Сопровождение не включает её стоимость."
 )
 PRIVACY = (
     "<b>🔒 Какие данные хранит бот</b>\n\n"
@@ -72,11 +73,11 @@ def customer_ticket(ticket: Ticket, timezone: str):
         return payment_request(ticket)
     hints = {
         "new": "Оператор скоро примет заказ. Ответ придёт сюда.",
-        "in_progress": "Ожидайте Фамилию и Имя от оператора.\n"
-                       "Ссылку на верификацию пока не создавайте.\n"
-                       "Строго следуйте нашей инструкции и указаниям оператора.",
+        "in_progress": "Оператор принял заказ в работу. 💬 Ответ придёт в этот чат.\n"
+                       "Прочитайте инструкцию перед началом самостоятельной проверки.\n"
+                       "🔒 Ссылку KYC, документы и коды входа сюда не отправляйте.",
         "waiting_user": "Ответ оператора выше. Продолжайте общение в этом чате.\n"
-                        "Ссылку на верификацию создавайте только по инструкции оператора.",
+                        "Проверку проходите самостоятельно в своём аккаунте; ссылку KYC сюда не отправляйте.",
         "resolved": "Сопровождение завершено. Спасибо за обращение!",
         "cancelled": "Заказ отменён.",
     }
@@ -94,7 +95,10 @@ def customer_ticket(ticket: Ticket, timezone: str):
         button = action("📋 Наша инструкция", f"c:guide:{ticket.service_code}")
     else:
         button = action("Написать оператору", f"c:write:{ticket.id}")
-    return text, Keyboard([[button]])
+    rows = [[button]]
+    if can_customer_cancel(ticket):
+        rows.append([action("❌ Отменить заказ", f"c:cancel:{ticket.id}:{ticket.version}")])
+    return text, Keyboard(rows)
 
 
 def customer_details(ticket: Ticket, timezone: str):
@@ -103,28 +107,34 @@ def customer_details(ticket: Ticket, timezone: str):
 
 
 def payment_request(ticket: Ticket):
+    rows = [[action("📎 Отправить чек", f"c:proof_prompt:{ticket.id}")]]
+    if can_customer_cancel(ticket):
+        rows.append([action("❌ Отменить заказ", f"c:cancel:{ticket.id}:{ticket.version}")])
     return (
         f"<b>💳 Оплата заказа №{ticket.id:04d}</b>\n"
         f"{catalog.service_title(ticket.service_code, ticket.plan_code)} · {catalog.dollars(ticket.price_usd)}\n\n"
         "<b>Сейчас тестовый режим. Реальные реквизиты ещё не подключены.</b>\n"
         "Деньги переводить не нужно.\n\n"
         "Для проверки сценария пришлите тестовый скриншот или ссылку на чек без личных данных. "
-        "Перед отправкой оператору бот попросит подтверждение.",
-        Keyboard([[action("Отправить чек", f"c:proof_prompt:{ticket.id}")]]),
+        "Перед отправкой оператору бот попросит подтверждение.\n\n"
+        "После отправки чека отменить заказ сможет только оператор.",
+        Keyboard(rows),
     )
 
 
-def admin_home(counts: dict[str, int], queue_count: int | None = None):
+def admin_home(counts: dict[str, int], queue_count: int | None = None, stages=None):
     active = sum(counts[key] for key in OPEN_STATUSES)
     waiting = counts["new"] + counts["in_progress"] if queue_count is None else queue_count
     return (
-        "<b>Заказы</b>\n\n"
+        "<b>🧑‍💻 Заказы</b>\n\n"
         f"Требуют внимания: <b>{waiting}</b>\n"
-        f"В работе: <b>{counts['in_progress'] + counts['waiting_user']}</b>\n\n"
-        "Откройте следующий заказ. Ответить можно прямо на его сообщение в Telegram.",
+        f"💳 Чеки на проверке: <b>{stages['review'] if stages else 0}</b>\n"
+        f"🛠 В работе: <b>{counts['in_progress'] + counts['waiting_user']}</b>\n\n"
+        "«Следующий» сначала открывает чек, затем заказ в работе, затем новый.\n"
+        "Ответить сразу можно через Telegram Reply на сообщение клиента.",
         Keyboard([
-            [action(f"Следующий · {waiting}", "a:next")],
-            [action(f"Все заказы · {active}", "a:list:active:0")],
+            [action(f"▶️ Следующий · {waiting}", "a:next")],
+            [action(f"📋 Все заказы · {active}", "a:list:active:0"), action("🔎 По номеру", "a:find")],
         ]),
     )
 

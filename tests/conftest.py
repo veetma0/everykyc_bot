@@ -95,7 +95,7 @@ async def env(store, tmp_path):
 
     async def message(
         uid, text=None, reply_to=None, photo=False, edited=False, message_id=None, chat_type="private",
-        caption=None, document=None,
+        caption=None, document=None, entities=None,
     ):
         user = {"id": uid, "is_bot": False, "first_name": f"Клиент {uid}", "username": f"user{uid}"}
         number = next(ids)
@@ -109,6 +109,8 @@ async def env(store, tmp_path):
             data["text"] = text
             if text.startswith("/"):
                 data["entities"] = [{"type": "bot_command", "offset": 0, "length": len(text.split()[0])}]
+        if entities is not None:
+            data["entities"] = entities
         if reply_to:
             data["reply_to_message"] = {
                 "message_id": reply_to,

@@ -14,6 +14,10 @@ from .acquisition import SOURCES
 OPEN_STATUSES = ("new", "in_progress", "waiting_user")
 QUEUE_STATUSES = ("new", "in_progress")
 CLAIM_SECONDS = 15 * 60
+QUEUE_ORDER = (
+    "CASE WHEN t.payment_stage='review' THEN 0 "
+    "WHEN t.status='in_progress' THEN 1 ELSE 2 END,t.waiting_since,t.id"
+)
 STATUS_NAMES = {
     "new": "⏳ Ожидает оператора",
     "in_progress": "🛠 В работе",
@@ -53,6 +57,14 @@ class Ticket:
     demo_network: str | None = None
     waiting_since: float = 0
     payment_stage: str = "legacy"
+    has_payment_proof: bool = False
+
+
+def can_customer_cancel(ticket: Ticket) -> bool:
+    return (
+        ticket.status == "new" and ticket.payment_stage in {"not_requested", "awaiting_payment"}
+        and not ticket.has_payment_proof
+    )
 
 
 def ticket_status(ticket: Ticket) -> str:
@@ -223,6 +235,12 @@ class Store:
                 "CREATE INDEX IF NOT EXISTS operator_queue ON tickets(waiting_since,id) "
                 "WHERE status IN ('new','in_progress')"
             )
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS ticket_stage ON tickets(payment_stage,status,waiting_since,id)"
+            )
+            self.db.execute(
+                "CREATE INDEX IF NOT EXISTS unread_customer_messages ON messages(ticket_id,id) WHERE role='user'"
+            )
 
     @staticmethod
     def _code(value: str):
@@ -274,6 +292,8 @@ class Store:
             """SELECT t.id,t.user_id,u.chat_id,u.display_name,u.username,t.status,
             t.version,t.created_at,t.updated_at,t.service_code,t.plan_code,t.price_usd,t.demo_network,t.waiting_since,
             t.payment_stage,
+            EXISTS(SELECT 1 FROM payment_proofs p JOIN messages pm ON pm.id=p.message_id
+                WHERE pm.ticket_id=t.id) has_payment_proof,
             (SELECT COUNT(*) FROM messages m WHERE m.ticket_id=t.id AND m.role='user' AND m.id>t.last_read_id) unread
             FROM tickets t JOIN users u ON u.id=t.user_id WHERE t.id=?""",
             (ticket_id,),
@@ -436,7 +456,10 @@ class Store:
     def page(self, scope: str, offset: int, limit: int = 8) -> tuple[list[Ticket], int]:
         where = {
             "active": "status IN ('new','in_progress','waiting_user')",
-            "new": "status='new'",
+            "new": "status='new' AND payment_stage IN ('not_requested','legacy')",
+            "review": "status='new' AND payment_stage='review'",
+            "payment": "status='new' AND payment_stage='awaiting_payment'",
+            "work": "status IN ('in_progress','waiting_user')",
             "closed": "status IN ('resolved','cancelled')",
         }[scope]
         total = self.db.execute(f"SELECT COUNT(*) FROM tickets WHERE {where}").fetchone()[0]
@@ -445,6 +468,19 @@ class Store:
             (limit, offset),
         ).fetchall()
         return [self.ticket(row[0]) for row in rows], total
+
+    def stage_counts(self) -> dict[str, int]:
+        result = {"new": 0, "review": 0, "payment": 0, "work": 0}
+        for row in self.db.execute(
+            "SELECT status,payment_stage,COUNT(*) n FROM tickets "
+            "WHERE status IN ('new','in_progress','waiting_user') GROUP BY status,payment_stage"
+        ):
+            if row["status"] != "new":
+                key = "work"
+            else:
+                key = {"review": "review", "awaiting_payment": "payment"}.get(row["payment_stage"], "new")
+            result[key] += row["n"]
+        return result
 
     def counts(self) -> dict[str, int]:
         result = {key: 0 for key in STATUS_NAMES}
@@ -501,7 +537,7 @@ class Store:
             ).fetchone()[0]
             rows = self.db.execute(
                 f"SELECT t.id FROM tickets t WHERE {predicate} "
-                "ORDER BY t.waiting_since,t.id LIMIT ? OFFSET ?",
+                f"ORDER BY {QUEUE_ORDER} LIMIT ? OFFSET ?",
                 (*args, limit, offset),
             ).fetchall()
             return [self.ticket(row["id"]) for row in rows], total
@@ -566,11 +602,11 @@ class Store:
                     )
                     return self.ticket(current["ticket_id"])
             row = self.db.execute(
-                """SELECT t.id FROM tickets t WHERE t.status IN ('new','in_progress')
+                f"""SELECT t.id FROM tickets t WHERE t.status IN ('new','in_progress')
                 AND t.payment_stage<>'awaiting_payment'
                 AND (? IS NULL OR t.id<>?)
                 AND NOT EXISTS (SELECT 1 FROM operator_claims c WHERE c.ticket_id=t.id)
-                ORDER BY t.waiting_since,t.id LIMIT 1""",
+                ORDER BY {QUEUE_ORDER} LIMIT 1""",
                 (skip_ticket_id, skip_ticket_id),
             ).fetchone()
             if not row:
@@ -651,16 +687,20 @@ class Store:
         ).fetchone()
         return row if row and (token is None or secrets.compare_digest(row["token"], token)) else None
 
-    def set_status(self, ticket_id: int, version: int, status: str, actor_id: int) -> Ticket:
+    def set_status(self, ticket_id: int, version: int, status: str, actor_id: int, *, customer_cancel=False) -> Ticket:
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             ticket = self.ticket(ticket_id)
             if not ticket or ticket.version != version or status not in TRANSITIONS[ticket.status]:
                 raise StaleTicket("Заявка уже изменилась. Откройте актуальную карточку.")
+            if customer_cancel and (
+                status != "cancelled" or actor_id != ticket.user_id or not can_customer_cancel(ticket)
+            ):
+                raise StaleTicket("Самостоятельная отмена доступна только до отправки чека. Напишите оператору.")
             if ticket.payment_stage not in {"legacy", "confirmed"} and status != "cancelled":
                 raise StaleTicket("Сначала подтвердите оплату заказа после проверки.")
-            # A customer may cancel their own order even while an operator has it open.
-            if not (status == "cancelled" and actor_id == ticket.user_id):
+            # Only the validated pre-payment customer action can bypass an operator's short lease.
+            if not customer_cancel:
                 self._check_claim_actor(ticket_id, actor_id)
             now = time.time()
             self.db.execute(

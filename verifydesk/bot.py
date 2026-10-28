@@ -3,6 +3,7 @@ import logging
 import re
 import time
 from html import escape
+from urllib.parse import urlsplit
 
 from telegram import BotCommand, BotCommandScopeChat, ForceReply, Update
 from telegram.constants import ChatType, ParseMode
@@ -17,7 +18,7 @@ from telegram.ext import (
 )
 
 from .config import Config
-from .store import OPEN_STATUSES, STATUS_NAMES, StaleTicket, Store, ticket_status
+from .store import OPEN_STATUSES, STATUS_NAMES, StaleTicket, Store, can_customer_cancel, ticket_status
 from . import acquisition, catalog, screens, theme, ui
 
 
@@ -25,10 +26,30 @@ log = logging.getLogger(__name__)
 MAX_TEXT = 2400
 
 
+def contains_verification_link(message):
+    text = message.text or message.caption or ""
+    urls = re.findall(r"https?://[^\s<>]+", text, re.IGNORECASE)
+    urls += [e.url for e in (message.entities or message.caption_entities or ()) if e.url]
+    for url in urls:
+        try:
+            parsed = urlsplit(url)
+            host = (parsed.hostname or "").casefold().rstrip(".")
+        except ValueError:
+            continue
+        if host == "withpersona.com" or host.endswith(".withpersona.com"):
+            return True
+        if host in {"claude.ai", "claude.com"} and any(
+            word in parsed.path.casefold() for word in ("verif", "identity")
+        ):
+            return True
+    return False
+
+
 def operator_commands():
     return [
         BotCommand("admin", "Кабинет оператора"),
         BotCommand("next", "Следующий заказ"),
+        BotCommand("order", "Найти заказ по номеру"),
         BotCommand("start", "Текущее меню"),
         BotCommand("client", "Перейти в режим клиента"),
         BotCommand("clients", "Карточки клиентов"),
@@ -85,6 +106,9 @@ class Desk:
     def client_mode(self, user_id: int):
         return self.is_admin(user_id) and self.store.operator_mode(user_id) == "client"
 
+    def admin_home(self, uid):
+        return ui.admin_home(self.store.counts(), self.store.queue_count(uid), self.store.stage_counts())
+
     async def switch_mode(self, update, context, mode):
         uid = update.effective_user.id
         if not self.is_admin(uid):
@@ -99,7 +123,7 @@ class Desk:
         card = (
             ui.home(self.config.title, self.store.for_user(uid))
             if mode == "client"
-            else ui.admin_home(self.store.counts(), self.store.queue_count(uid))
+            else self.admin_home(uid)
         )
         await self.screen(update, context, *card, customer=mode == "client")
 
@@ -221,6 +245,7 @@ class Desk:
         command = update.effective_message.text.split()[0].split("@")[0].lower()
         uid = update.effective_user.id
         self.store.clear_input(uid)
+        context.user_data.pop("order_search_until", None)
         if command == "/start" and not self.is_admin(uid):
             source = acquisition.start_source(update.effective_message.text)
             if source:
@@ -232,7 +257,7 @@ class Desk:
                 await self.screen(update, context, "Эта команда доступна только оператору.")
                 return
             await self.switch_mode(update, context, "admin" if command == "/admin" else "client")
-        elif command in {"/clients", "/preview", "/style", "/sources", "/next"}:
+        elif command in {"/clients", "/preview", "/style", "/sources", "/next", "/order"}:
             if not self.is_admin(uid):
                 await self.screen(update, context, "Эта команда доступна только оператору.")
                 return
@@ -246,6 +271,12 @@ class Desk:
                 return
             if command == "/next":
                 await self.next_ticket(update, context)
+            elif command == "/order":
+                args = update.effective_message.text.split(maxsplit=1)
+                if len(args) == 1:
+                    await self.start_order_search(update, context)
+                else:
+                    await self.find_order(update, context, args[1])
             elif command == "/clients":
                 await self.clients_screen(update, context, 0)
             elif command == "/sources":
@@ -298,7 +329,7 @@ class Desk:
             card = (
                 ui.home(self.config.title, self.store.for_user(uid))
                 if self.client_mode(uid)
-                else ui.admin_home(self.store.counts(), self.store.queue_count(uid))
+                else self.admin_home(uid)
             )
             await self.screen(update, context, *card)
         else:
@@ -466,6 +497,7 @@ class Desk:
                 if parts[1] in {"send_draft", "discard_draft"}:
                     await self.draft_callback(update, context, uid, parts)
                     return
+                context.user_data.pop("order_search_until", None)
                 self.store.clear_input(uid)
             if parts[0] == "c":
                 await self.customer_callback(update, context, uid, parts)
@@ -475,6 +507,7 @@ class Desk:
                 await self.admin_callback(update, context, uid, parts)
         except (ValueError, IndexError, KeyError, StaleTicket):
             if parts[0] == "a":
+                context.user_data.pop("order_search_until", None)
                 self.store.clear_input(uid)
                 self.store.release_claim(uid)
             await self.screen(
@@ -629,6 +662,13 @@ class Desk:
             elif verb == "cancel":
                 if ticket.status not in OPEN_STATUSES or int(parts[3]) != ticket.version:
                     raise StaleTicket()
+                if not can_customer_cancel(ticket):
+                    await self.screen(
+                        update, context,
+                        "🔒 После отправки чека самостоятельная отмена закрыта. По этому заказу поможет оператор.",
+                        ui.Keyboard([[ui.action("💬 Написать оператору", f"c:write:{ticket.id}")]]),
+                    )
+                    return
                 await self.screen(
                     update,
                     context,
@@ -641,7 +681,7 @@ class Desk:
                     ),
                 )
             elif verb == "close":
-                ticket = self.store.set_status(ticket.id, int(parts[3]), "cancelled", uid)
+                ticket = self.store.set_status(ticket.id, int(parts[3]), "cancelled", uid, customer_cancel=True)
                 await self.screen(update, context, *ui.customer_ticket(ticket, self.config.timezone))
                 await self.notify_admins(context.bot, ticket)
             else:
@@ -677,6 +717,9 @@ class Desk:
         if verb == "next":
             skip = int(parts[2]) if len(parts) > 2 else None
             await self.next_ticket(update, context, skip)
+            return
+        if verb == "find":
+            await self.start_order_search(update, context)
             return
         if verb == "more":
             await self.screen(update, context, *ui.admin_more())
@@ -716,15 +759,20 @@ class Desk:
             if offset >= total and offset > 0:
                 offset = max(0, ((total - 1) // 8) * 8)
                 tickets, total = page(offset)
-            rows = [
-                [
-                    ui.action(
-                        f"{'● ' if t.unread else ''}№{t.id:04d} · {t.display_name[:24]} · {ticket_status(t)}",
-                        f"a:{'proofs' if scope == 'queue' and t.payment_stage == 'review' else 'reply' if scope == 'queue' and t.payment_stage in {'legacy', 'confirmed'} else 'view'}:{t.id}",
-                    )
-                ]
-                for t in tickets
-            ]
+            rows = []
+            for ticket in tickets:
+                owner = self.store.claim_owner(ticket.id)
+                mark = "🔒 " if owner and owner != uid else "● " if ticket.unread else ""
+                action = "view"
+                if scope == "queue":
+                    if ticket.payment_stage == "review":
+                        action = "proofs"
+                    elif ticket.payment_stage in {"legacy", "confirmed"}:
+                        action = "reply"
+                rows.append([ui.action(
+                    f"{mark}№{ticket.id:04d} · {ticket.display_name[:24]} · {ticket_status(ticket)}",
+                    f"a:{action}:{ticket.id}",
+                )])
             navigation = []
             if offset > 0:
                 navigation.append(ui.action("← Назад", f"a:list:{scope}:{max(0, offset - 8)}"))
@@ -732,12 +780,23 @@ class Desk:
                 navigation.append(ui.action("Далее →", f"a:list:{scope}:{offset + 8}"))
             if navigation:
                 rows.append(navigation)
+            stage_buttons = [
+                ui.action(label, f"a:list:{target}:0")
+                for target, label in (("new", "🆕 Новые"), ("review", "💳 Чеки"), ("work", "🛠 В работе"), ("payment", "⏳ Ждём оплату"))
+                if target != scope
+            ]
+            rows.extend([stage_buttons[i:i + 2] for i in range(0, len(stage_buttons), 2)])
             if scope == "active":
                 rows.append([ui.action("Завершённые", "a:list:closed:0")])
+            else:
+                rows.append([ui.action("📋 Все заказы", "a:list:active:0")])
             rows.append([ui.action("Кабинет оператора", "a:home")])
-            title = {"queue": "Ожидающие ответа", "active": "Активные", "new": "Новые", "closed": "Завершённые"}[scope]
+            title = {
+                "queue": "Требуют внимания", "active": "Активные", "new": "Новые",
+                "review": "Проверка оплаты", "work": "В работе", "payment": "Ожидают оплаты", "closed": "Завершённые",
+            }[scope]
             text = f"<b>{title} заказы · {total}</b>\n\n" + (
-                "Выберите заказ. ● — есть новые сообщения." if tickets else "Здесь пока пусто."
+                "● — новые сообщения · 🔒 — уже открыт другим менеджером." if tickets else "Здесь пока пусто."
             )
             await self.screen(update, context, text, ui.Keyboard(rows))
             return
@@ -826,6 +885,40 @@ class Desk:
                 self.store.map_reply(uid, shown.message_id, ticket.id)
         else:
             raise ValueError("Unknown operator action")
+
+    async def start_order_search(self, update, context):
+        uid = update.effective_user.id
+        if not self.is_admin(uid) or self.client_mode(uid):
+            return
+        self.store.clear_input(uid)
+        self.store.release_claim(uid)
+        context.user_data["order_search_until"] = time.monotonic() + 300
+        await self.screen(
+            update, context, "<b>🔎 Найти заказ</b>\n\nВведите номер, например <b>123</b> или <b>№0123</b>.",
+            ui.Keyboard([[ui.action("Назад к заказам", "a:home")]]),
+        )
+
+    async def find_order(self, update, context, value):
+        uid = update.effective_user.id
+        if not self.is_admin(uid) or self.client_mode(uid):
+            return
+        self.store.clear_input(uid)
+        self.store.release_claim(uid)
+        match = re.fullmatch(r"[#№]?\s*(\d{1,10})", value.strip())
+        ticket = self.store.ticket(int(match[1])) if match and int(match[1]) > 0 else None
+        if ticket is None:
+            context.user_data["order_search_until"] = time.monotonic() + 300
+            await self.screen(
+                update, context,
+                "Заказ не найден. Введите другой номер, например <b>123</b>.",
+                ui.Keyboard([[ui.action("Назад к заказам", "a:home")]]),
+            )
+            return
+        context.user_data.pop("order_search_until", None)
+        shown = await self.screen(update, context, *self.admin_card(ticket))
+        if shown:
+            self.store.map_reply(uid, shown.message_id, ticket.id)
+            self.store.mark_read(ticket.id)
 
     async def clients_screen(self, update, context, offset):
         if not self.is_admin(update.effective_user.id):
@@ -1139,6 +1232,23 @@ class Desk:
             return
         message = update.message
         uid = update.effective_user.id
+        if self.is_admin(uid) and not self.client_mode(uid):
+            searching = context.user_data.get("order_search_until", 0)
+            if searching:
+                if not message.reply_to_message and time.monotonic() < searching:
+                    await self.find_order(update, context, message.text or "")
+                    return
+                context.user_data.pop("order_search_until", None)
+        if (not self.is_admin(uid) or self.client_mode(uid)) and contains_verification_link(message):
+            self.store.clear_input(uid)
+            await deliver(
+                context.bot, uid,
+                "🔒 <b>Ссылку проверки не отправляйте.</b>\n\n"
+                "KYC нужно пройти самостоятельно в своём аккаунте. "
+                "Опишите ошибку текстом без ссылки, документов и кодов входа.",
+                self.recovery_keyboard(),
+            )
+            return
         if self.store.find_source(message.chat_id, message.message_id):
             return
         draft = self.store.draft(uid)
@@ -1160,7 +1270,7 @@ class Desk:
             self.store.clear_input(uid)
             if self.is_admin(uid) and not self.client_mode(uid):
                 self.store.release_claim(uid)
-                await self.screen(update, context, *ui.admin_home(self.store.counts(), self.store.queue_count(uid)))
+                await self.screen(update, context, *self.admin_home(uid))
             else:
                 await self.screen(update, context, *ui.home(self.config.title, self.store.for_user(uid)))
             return
@@ -1335,6 +1445,7 @@ class Desk:
 
     async def unknown_command(self, update, context):
         if self.remember(update):
+            context.user_data.pop("order_search_until", None)
             self.store.clear_input(update.effective_user.id)
             if self.is_admin(update.effective_user.id):
                 self.store.release_claim(update.effective_user.id)
@@ -1428,6 +1539,7 @@ def build_application(config: Config, store: Store, *, request=None):
                 "style",
                 "sources",
                 "next",
+                "order",
             ],
             desk.command,
         )

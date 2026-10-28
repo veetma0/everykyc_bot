@@ -40,7 +40,8 @@ def test_queue_age_tracks_unanswered_turn_not_latest_message(store, monkeypatch)
     store.add_message(first.id, "user", "Another detail", 101, 101, 3)
     assert store.ticket(first.id).waiting_since == 1020
     store.release_claim(43)
-    assert store.claim_next(42).id == second.id
+    assert store.claim_next(42).id == first.id  # Work in progress precedes a new request.
+    assert store.claim_next(43).id == second.id
 
 
 def test_claim_conflicts_expiry_switch_and_explicit_skip(store, monkeypatch):
