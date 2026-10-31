@@ -19,8 +19,8 @@ async def request_payment(env):
 
 async def test_visible_order_journey_requires_payment_review_before_work(env):
     await env.message(CLIENT, "/start")
-    assert len(buttons(last(env, CLIENT))) <= 2
-    for data in ("c:service:claude", "c:offer:claude:armenia", "c:order:claude:armenia"):
+    assert len(buttons(last(env, CLIENT))) == 4
+    for data in ("c:catalog", "c:category:other", "c:service:claude", "c:order:claude:standard"):
         assert data in callbacks(last(env, CLIENT))
         await env.callback(CLIENT, data)
     ticket = env.store.for_user(CLIENT)
@@ -30,8 +30,8 @@ async def test_visible_order_journey_requires_payment_review_before_work(env):
     assert accept in callbacks(last(env, ADMIN))
     assert env.store.ticket(ticket.id).status == "new"
     await env.callback(ADMIN, accept)
-    assert "тестовый режим" in last(env, CLIENT)["text"]
-    assert "переводить не нужно" in last(env, CLIENT)["text"].lower()
+    assert "Оператор принял сделку" in last(env, CLIENT)["text"]
+    assert "Дождитесь реквизитов" in last(env, CLIENT)["text"]
     assert env.store.ticket(ticket.id).payment_stage == "awaiting_payment"
     before = len(sent(env, CLIENT))
     await env.callback(ADMIN, accept)
@@ -40,7 +40,7 @@ async def test_visible_order_journey_requires_payment_review_before_work(env):
     await env.proof(CLIENT, photo=True, caption="Тестовое подтверждение")
     ticket = env.store.ticket(ticket.id)
     assert ticket.payment_stage == "review" and ticket.status == "new"
-    assert "🔎 Проверяем оплату" in last(env, CLIENT)["text"]
+    assert "Подтверждение сохранено" in last(env, CLIENT)["text"]
     assert any(v.startswith("a:confirm_payment:") for v in callbacks(last(env, ADMIN)))
     await env.callback(ADMIN, f"a:proofs:{ticket.id}")
     confirm = f"a:confirm_payment:{ticket.id}:{ticket.version}"
@@ -49,13 +49,14 @@ async def test_visible_order_journey_requires_payment_review_before_work(env):
     ticket = env.store.ticket(ticket.id)
     assert ticket.status == "in_progress" and ticket.payment_stage == "confirmed"
     assert "🛠 В работе" in last(env, CLIENT)["text"]
+    assert "Оплата подтверждена. Ожидайте сообщения от оператора." in last(env, CLIENT)["text"]
     finish = f"a:set:{ticket.id}:{ticket.version}:resolved"
     assert finish in callbacks(last(env, ADMIN))
     await env.callback(ADMIN, finish)
     assert env.store.ticket(ticket.id).status == "in_progress"
     await env.callback(ADMIN, f"a:confirm:{ticket.id}:{ticket.version}:resolved")
     assert env.store.ticket(ticket.id).status == "resolved"
-    assert "✅ Заказ выполнен" in last(env, CLIENT)["text"]
+    assert any("✅ Заказ выполнен" in row["text"] for row in sent(env, CLIENT))
     assert not any(method in {"sendInvoice", "createInvoiceLink", "getFile"} for method, _ in env.request.calls)
 
 
@@ -146,7 +147,7 @@ async def test_failed_requisites_delivery_keeps_recoverable_payment_stage(env, e
     assert "не подтверждена" in last(env, ADMIN)["text"]
     env.request.fail_chat = None
     await env.callback(CLIENT, f"c:requisites:{ticket.id}")
-    assert "Реальные реквизиты ещё не подключены" in last(env, CLIENT)["text"]
+    assert "Оператор принял сделку" in last(env, CLIENT)["text"]
     assert "DEMO-" not in last(env, CLIENT)["text"]
 
 
@@ -185,11 +186,12 @@ async def test_screenshot_as_image_document_survives_reopening(env):
     assert any(method == "sendDocument" for method, _ in env.request.calls)
 
 
-async def test_photos_outside_payment_stage_are_not_relayed(env):
+async def test_photos_outside_payment_stage_are_relayed_as_chat_attachments(env):
     ticket = await order(env)
     await env.message(CLIENT, photo=True)
     assert not env.store.payment_proofs(ticket.id)
-    assert not any(method in {"sendPhoto", "sendDocument", "getFile"} for method, _ in env.request.calls)
+    assert any(method == "sendPhoto" for method, _ in env.request.calls)
+    assert not any(method == "getFile" for method, _ in env.request.calls)
 
 
 async def test_second_operator_cannot_approve_payment_claimed_for_review(env):

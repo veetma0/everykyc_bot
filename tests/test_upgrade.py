@@ -37,12 +37,12 @@ def assert_preview_navigation(params):
     assert all(value.startswith("p:") or value == "a:home" for value in data)
 
 
-async def order(env, uid=CLIENT, service="claude", plan="armenia"):
+async def order(env, uid=CLIENT, service="claude", plan="standard"):
     await env.callback(uid, f"c:order:{service}:{plan}")
     return env.store.for_user(uid)
 
 
-@pytest.mark.parametrize("plan,price", [("armenia", "35.00"), ("europe", "50.00")])
+@pytest.mark.parametrize("plan,price", [("standard", "45.00")])
 async def test_claude_offer_shows_price_and_own_data_consent_before_one_click_order(env, plan, price):
     await env.callback(CLIENT, f"c:offer:claude:{plan}")
     offer_screen = last(env, CLIENT)
@@ -57,19 +57,19 @@ async def test_claude_offer_shows_price_and_own_data_consent_before_one_click_or
     assert (ticket.service_code, ticket.plan_code, ticket.price_usd) == ("claude", plan, price)
     assert ticket.status == "new"
     assert env.store.db.execute("SELECT consent_at FROM tickets WHERE id=?", (ticket.id,)).fetchone()[0] > 0
-    assert "Заказ" in last(env, CLIENT)["text"] or "заказ" in last(env, CLIENT)["text"]
+    assert "Сделка" in last(env, CLIENT)["text"]
     assert not last(env, CLIENT).get("reply_markup", {}).get("force_reply")
 
 
 async def test_existing_active_order_is_not_silently_changed_to_another_service_or_price(env):
     first = await order(env)
     admin_notifications = len(sent(env, ADMIN))
-    await order(env, plan="europe")
+    await order(env, service="alipay", plan="standard")
     current = env.store.for_user(CLIENT)
     assert current.id == first.id
-    assert (current.service_code, current.plan_code, current.price_usd) == ("claude", "armenia", "35.00")
+    assert (current.service_code, current.plan_code, current.price_usd) == ("claude", "standard", "45.00")
     assert len(sent(env, ADMIN)) == admin_notifications
-    assert "Claude" in last(env, CLIENT)["text"] and "$35" in last(env, CLIENT)["text"]
+    assert "Claude" in last(env, CLIENT)["text"] and "$45" in last(env, CLIENT)["text"]
 
 
 async def test_customer_card_never_discloses_operator_note(env):
@@ -101,8 +101,8 @@ async def test_customer_order_history_contains_only_owned_tickets(env):
     first = await order(env)
     legacy_ticket(env.store, first)
     env.store.set_status(first.id, first.version, "resolved", ADMIN)
-    second = await order(env, plan="europe")
-    other = await order(env, uid=OTHER, plan="europe")
+    second = await order(env, service="alipay", plan="standard")
+    other = await order(env, uid=OTHER, service="alipay", plan="standard")
     await env.callback(CLIENT, "c:orders:0")
     own_callbacks = callbacks(last(env, CLIENT))
     assert f"c:view:{first.id}" in own_callbacks
@@ -160,7 +160,7 @@ async def test_retired_payment_menu_returns_to_current_order_without_extra_choic
     ticket = await order(env)
     await env.callback(CLIENT, f"c:pay:{ticket.id}")
     screen = last(env, CLIENT)
-    assert "Заказ" in screen["text"]
+    assert "Сделка" in screen["text"]
     assert len(buttons(screen)) == 2
     assert not any(":network" in value for value in callbacks(screen))
     assert not any(method in {"sendInvoice", "createInvoiceLink"} for method, _ in env.request.calls)
@@ -195,7 +195,7 @@ async def test_other_customer_cannot_view_or_choose_mock_network_for_ticket(env)
     ):
         await env.callback(OTHER, value)
         assert "недоступен" in last(env, OTHER)["text"]
-        assert "$35" not in last(env, OTHER)["text"]
+        assert "$45" not in last(env, OTHER)["text"]
     assert env.store.ticket(ticket.id).demo_network is None
 
 
@@ -221,7 +221,7 @@ async def test_admin_preview_entry_and_navigation_keep_callback_namespace_read_o
     assert_preview_navigation(last(env, ADMIN))
     for value in (
         "p:catalog",
-        "p:offer:claude:armenia",
+        "p:offer:claude:standard",
         "p:guide:claude",
         "p:profile",
         "p:orders:0",
@@ -240,7 +240,7 @@ async def test_preview_cannot_create_close_or_change_mock_network_even_for_admin
     initial = tuple(env.store.db.execute("SELECT * FROM tickets WHERE id=?", (ticket.id,)).fetchone())
     for value in (
         "p:create",
-        "p:order:claude:europe",
+        "p:order:claude:standard",
         f"p:close:{ticket.id}:{ticket.version}",
         f"p:network:{ticket.id}:usdt_ton",
         f"p:write:{ticket.id}",
@@ -258,7 +258,7 @@ async def test_preview_cannot_create_close_or_change_mock_network_even_for_admin
 async def test_client_cannot_use_preview_command_or_forged_preview_callback(env):
     await env.message(CLIENT, "/preview")
     assert "только оператору" in last(env, CLIENT)["text"]
-    for value in ("p:catalog", "p:order:claude:armenia", "a:preview"):
+    for value in ("p:catalog", "p:order:claude:standard", "a:preview"):
         await env.callback(CLIENT, value)
         assert "Доступ" in last(env, CLIENT)["text"]
     assert env.store.for_user(CLIENT) is None
@@ -291,11 +291,11 @@ async def test_help_only_offers_claude_and_keeps_official_owner_verification_gui
     guide = last(env, CLIENT)
     assert "Claude" in guide["text"]
     assert "сво" in guide["text"].lower()
-    assert "Строго следуйте нашей инструкции" in guide["text"]
+    assert "Проверку проходите самостоятельно" in guide["text"]
     assert len(buttons(guide)) == 1
 
 
-@pytest.mark.parametrize("command,expected", [("/services", "Claude"), ("/profile", "Мои заказы")])
+@pytest.mark.parametrize("command,expected", [("/services", "Каталог услуг"), ("/profile", "Мои заказы")])
 async def test_new_customer_commands_are_registered_and_reach_the_right_screen(env, command, expected):
     await env.message(CLIENT, command)
     assert expected in last(env, CLIENT)["text"]
@@ -319,9 +319,11 @@ async def test_new_customer_entries_reach_catalog_without_legacy_unpriced_order(
     if "c:catalog" in data:
         await env.callback(CLIENT, "c:catalog")
         data = callbacks(last(env, CLIENT))
-    assert "c:service:claude" in data
+    assert "c:category:other" in data
+    await env.callback(CLIENT, "c:category:other")
+    assert "c:service:claude" in callbacks(last(env, CLIENT))
     await env.callback(CLIENT, "c:service:claude")
     data = callbacks(last(env, CLIENT))
-    assert "c:offer:claude:armenia" in data and "c:offer:claude:europe" in data
+    assert "c:order:claude:standard" in data
     assert "c:create" not in data
     assert env.store.for_user(CLIENT) is None

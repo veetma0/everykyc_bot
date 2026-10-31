@@ -52,12 +52,16 @@ async def reply_to_own_text(env, text, source_message, message_id=99000):
 
 
 async def test_complete_priced_order_manual_payment_reply_and_completion(env):
-    await env.message(CLIENT, "/start")
+    from .test_catalog import read_and_accept
+
+    env.require_terms = True
+    await read_and_accept(env)
+    await press(env, CLIENT, "c:catalog")
+    await press(env, CLIENT, "c:category:other")
     await press(env, CLIENT, "c:service:claude")
-    await press(env, CLIENT, "c:offer:claude:armenia")
-    await press(env, CLIENT, "c:order:claude:armenia")
+    await press(env, CLIENT, "c:order:claude:standard")
     ticket = env.store.for_user(CLIENT)
-    assert (ticket.price_usd, ticket.status, ticket.payment_stage) == ("35.00", "new", "not_requested")
+    assert (ticket.price_usd, ticket.status, ticket.payment_stage) == ("45.00", "new", "not_requested")
     assert "Ожидает оператора" in last(env, CLIENT)["text"]
 
     await env.message(CLIENT, "На втором шаге появляется ошибка проверки")
@@ -68,8 +72,8 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
     assert current.status == "new"  # Opening a new order does not start unpaid work.
     await press(env, ADMIN, f"a:request_payment:{ticket.id}:{current.version}")
     assert env.store.ticket(ticket.id).payment_stage == "awaiting_payment"
-    assert "тестовый режим" in last(env, CLIENT)["text"]
-    assert "переводить не нужно" in last(env, CLIENT)["text"].lower()
+    assert "Оператор принял сделку" in last(env, CLIENT)["text"]
+    assert "Дождитесь реквизитов" in last(env, CLIENT)["text"]
 
     await env.proof(CLIENT, "Тестовое подтверждение: https://example.org/mock-proof/123")
     current = env.store.ticket(ticket.id)
@@ -91,9 +95,9 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
     await env.message(CLIENT, "Страница сообщает, что ссылка истекла")
     assert env.store.ticket(ticket.id).status == "in_progress"
 
-    await press(env, CLIENT, f"c:view:{ticket.id}")
+    await env.message(CLIENT, "/status")
     await press(env, CLIENT, "c:guide:claude")
-    assert "Строго следуйте нашей инструкции" in last(env, CLIENT)["text"]
+    assert "Проверку проходите самостоятельно" in last(env, CLIENT)["text"]
     await press(env, CLIENT, "c:current")
 
     await env.callback(ADMIN, f"a:view:{ticket.id}")
@@ -102,18 +106,19 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
     assert env.store.ticket(ticket.id).status == "in_progress"
     await press(env, ADMIN, f"a:confirm:{ticket.id}:{version}:resolved")
     assert env.store.ticket(ticket.id).status == "resolved"
-    assert "Заказ выполнен" in last(env, CLIENT)["text"]
+    assert any("Заказ выполнен" in row["text"] for row in sent(env, CLIENT))
     assert not any(":cancel:" in value for value in callbacks(last(env, CLIENT)))
     await env.message(CLIENT, "/profile")
     profile = env.store.profile(CLIENT)
     assert (profile.total_tickets, profile.active_tickets, profile.resolved_tickets) == (1, 0, 1)
     await press(env, CLIENT, "c:orders:0")
     await press(env, CLIENT, f"c:view:{ticket.id}")
-    await press(env, CLIENT, "c:service:claude")
-    await press(env, CLIENT, "c:offer:claude:europe")
-    await press(env, CLIENT, "c:order:claude:europe")
+    await press(env, CLIENT, "c:catalog")
+    await press(env, CLIENT, "c:category:wallets")
+    await press(env, CLIENT, "c:service:alipay")
+    await press(env, CLIENT, "c:order:alipay:standard")
     followup = env.store.for_user(CLIENT)
-    assert followup.id != ticket.id and (followup.service_code, followup.plan_code) == ("claude", "europe")
+    assert followup.id != ticket.id and (followup.service_code, followup.plan_code) == ("alipay", "standard")
     assert followup.price_usd == "50.00" and followup.payment_stage == "not_requested"
 
 
@@ -200,7 +205,7 @@ async def test_closed_ticket_reply_prompt_cannot_send_to_new_active_ticket(env):
     prompt = env.store.db.execute("SELECT MAX(message_id) FROM reply_targets WHERE chat_id=?", (ADMIN,)).fetchone()[0]
     legacy_ticket(env.store, first)
     env.store.set_status(first.id, first.version, "resolved", ADMIN)
-    second = await order(env, plan="europe")
+    second = await order(env, service="alipay", plan="standard")
     before = len(sent(env, CLIENT))
     await env.message(ADMIN, "Ответ по старой заявке", reply_to=prompt)
     assert len(sent(env, CLIENT)) == before
@@ -225,7 +230,7 @@ async def test_closed_ticket_buttons_remain_read_only_after_a_new_request(env):
     first = await order(env)
     legacy_ticket(env.store, first)
     first = env.store.set_status(first.id, first.version, "resolved", ADMIN)
-    current = await order(env, plan="europe")
+    current = await order(env, service="alipay", plan="standard")
     snapshot = tuple(env.store.db.execute("SELECT * FROM tickets WHERE id=?", (first.id,)).fetchone())
     for data in (
         f"c:pay:{first.id}",
@@ -274,14 +279,14 @@ async def test_every_generated_callback_stays_within_telegram_size_limit(env):
 async def test_legacy_create_button_leads_to_current_offers_before_order_creation(env):
     await env.callback(CLIENT, "c:create")
     assert env.store.for_user(CLIENT) is None
-    assert "c:service:claude" in callbacks(last(env, CLIENT))
+    assert "c:category:other" in callbacks(last(env, CLIENT))
+    await press(env, CLIENT, "c:category:other")
     await press(env, CLIENT, "c:service:claude")
-    assert "c:offer:claude:armenia" in callbacks(last(env, CLIENT))
-    assert "c:offer:claude:europe" in callbacks(last(env, CLIENT))
+    assert "c:order:claude:standard" in callbacks(last(env, CLIENT))
     assert "c:create" not in callbacks(last(env, CLIENT))
 
 
-@pytest.mark.parametrize("plan", ["armenia", "europe"])
+@pytest.mark.parametrize("plan", ["standard"])
 async def test_instructions_keep_selected_claude_plan_as_return_destination(env, plan):
     await env.callback(CLIENT, f"c:offer:claude:{plan}")
     guide = f"c:guide:claude:{plan}"
@@ -302,18 +307,11 @@ async def test_latest_admin_history_marks_seen_messages_read_but_older_page_does
     assert env.store.ticket(ticket.id).unread == 0
 
 
-async def test_explicit_customer_prompt_allows_operator_to_test_a_real_own_request(env):
+async def test_operator_client_mode_sends_directly_in_own_request(env):
+    await env.message(ADMIN, "/client")
     ticket = await order(env, uid=ADMIN)
-    # The self-test account also receives the operator notification after order creation.
-    await env.callback(ADMIN, f"c:view:{ticket.id}")
-    assert f"c:write:{ticket.id}" in callbacks(last(env, ADMIN))
-    await env.callback(ADMIN, f"c:write:{ticket.id}")
-    assert last(env, ADMIN)["reply_markup"]["force_reply"]
-    prompt = env.store.db.execute(
-        "SELECT MAX(message_id) FROM customer_reply_targets WHERE chat_id=?", (ADMIN,)
-    ).fetchone()[0]
-    assert env.store.customer_reply_ticket(ADMIN, prompt).id == ticket.id
-    await env.message(ADMIN, "Проверяю собственную заявку как клиент", reply_to=prompt)
+    assert env.store.customer_focus(ADMIN).id == ticket.id
+    await env.message(ADMIN, "Проверяю собственную заявку как клиент")
     row = env.store.db.execute("SELECT role,body FROM messages WHERE source_chat=?", (ADMIN,)).fetchone()
     assert row["role"] == "user" and row["body"] == "Проверяю собственную заявку как клиент"
     assert env.store.ticket(ticket.id).unread == 1
@@ -330,7 +328,7 @@ async def test_customer_reply_to_closed_operator_message_cannot_go_to_new_active
     updated = env.store.ticket(first.id)
     legacy_ticket(env.store, first)
     env.store.set_status(first.id, updated.version, "resolved", ADMIN)
-    second = await order(env, plan="europe")
+    second = await order(env, service="alipay", plan="standard")
     before = len(sent(env, ADMIN))
     await env.message(CLIENT, "Это ответ на старую переписку", reply_to=old_response)
     assert len(sent(env, ADMIN)) == before
@@ -396,7 +394,7 @@ async def test_reply_to_own_message_in_closed_ticket_cannot_attach_to_new_reques
     first = env.store.ticket(first.id)
     legacy_ticket(env.store, first)
     env.store.set_status(first.id, first.version, "resolved", ADMIN)
-    second = await order(env, plan="europe")
+    second = await order(env, service="alipay", plan="standard")
     before = len(sent(env, ADMIN))
     await reply_to_own_text(env, "Уточнение по старому вопросу", 900)
     assert len(sent(env, ADMIN)) == before
@@ -434,7 +432,7 @@ async def test_reply_to_customer_card_and_save_receipt_routes_explicitly(env):
     current = env.store.ticket(ticket.id)
     legacy_ticket(env.store, current)
     env.store.set_status(current.id, current.version, "resolved", ADMIN)
-    await order(env, plan="europe")
+    await order(env, service="alipay", plan="standard")
     before = len(sent(env, ADMIN))
     await env.message(CLIENT, "Ответ на старую квитанцию", reply_to=receipt)
     assert len(sent(env, ADMIN)) == before

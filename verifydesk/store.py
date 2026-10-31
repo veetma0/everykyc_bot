@@ -58,6 +58,7 @@ class Ticket:
     waiting_since: float = 0
     payment_stage: str = "legacy"
     has_payment_proof: bool = False
+    kind: str = "order"
 
 
 def can_customer_cancel(ticket: Ticket) -> bool:
@@ -69,6 +70,14 @@ def can_customer_cancel(ticket: Ticket) -> bool:
 
 def ticket_status(ticket: Ticket) -> str:
     """One customer-facing status, including the payment steps before work begins."""
+    if ticket.kind == "wholesale":
+        return {
+            "new": "🤝 Опт · ожидает оператора",
+            "in_progress": "🤝 Опт · диалог с оператором",
+            "waiting_user": "🤝 Опт · диалог с оператором",
+            "resolved": "🤝 Обсуждение опта завершено",
+            "cancelled": "🤝 Обсуждение опта закрыто",
+        }[ticket.status]
     if ticket.status == "new":
         if ticket.payment_stage == "awaiting_payment":
             return "💳 Ожидает оплаты"
@@ -106,6 +115,11 @@ class Store:
                 id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL,
                 display_name TEXT NOT NULL, username TEXT
             );
+            CREATE TABLE IF NOT EXISTS user_terms (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                viewed_version TEXT NOT NULL, viewed_page INTEGER NOT NULL,
+                accepted_version TEXT, accepted_at REAL
+            );
             CREATE TABLE IF NOT EXISTS tickets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL REFERENCES users(id),
@@ -114,8 +128,10 @@ class Store:
                 created_at REAL NOT NULL, updated_at REAL NOT NULL,
                 consent_at REAL NOT NULL, last_read_id INTEGER NOT NULL DEFAULT 0
             );
-            CREATE UNIQUE INDEX IF NOT EXISTS one_open_ticket ON tickets(user_id)
-                WHERE status IN ('new','in_progress','waiting_user');
+            CREATE TABLE IF NOT EXISTS ticket_terms (
+                ticket_id INTEGER PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
+                version TEXT NOT NULL, accepted_at REAL NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
@@ -126,6 +142,26 @@ class Store:
                 UNIQUE(source_chat, source_message)
             );
             CREATE INDEX IF NOT EXISTS ticket_messages ON messages(ticket_id, id);
+            CREATE TABLE IF NOT EXISTS customer_focus (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS reviews (
+                ticket_id INTEGER PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                stars INTEGER NOT NULL CHECK(stars BETWEEN 1 AND 5),
+                comment TEXT, created_at REAL NOT NULL, finished_at REAL
+            );
+            CREATE TABLE IF NOT EXISTS review_reply_targets (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                message_id INTEGER NOT NULL,
+                ticket_id INTEGER NOT NULL REFERENCES reviews(ticket_id) ON DELETE CASCADE,
+                PRIMARY KEY(user_id,message_id)
+            );
+            CREATE TABLE IF NOT EXISTS chat_attachments (
+                message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                file_id TEXT NOT NULL, file_kind TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS payment_proofs (
                 message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
                 file_id TEXT,
@@ -199,6 +235,7 @@ class Store:
                 "note_updated_by": "INTEGER",
             },
             "tickets": {
+                "kind": "TEXT NOT NULL DEFAULT 'order' CHECK(kind IN ('order','wholesale'))",
                 "service_code": "TEXT NOT NULL DEFAULT 'claude'",
                 "plan_code": "TEXT NOT NULL DEFAULT 'standard'",
                 "price_usd": "TEXT",
@@ -209,6 +246,7 @@ class Store:
             "reply_targets": {
                 "delivered_operator_id": "INTEGER NOT NULL DEFAULT 0",
             },
+            "reviews": {"source_chat": "INTEGER", "source_message": "INTEGER"},
         }
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
@@ -217,6 +255,15 @@ class Store:
                 for name, definition in columns.items():
                     if name not in present:
                         self.db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+            self.db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS review_message_source ON reviews(source_chat,source_message) "
+                "WHERE source_chat IS NOT NULL AND source_message IS NOT NULL"
+            )
+            self.db.execute("DROP INDEX IF EXISTS one_open_ticket")
+            self.db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS one_open_conversation ON tickets(user_id,kind) "
+                "WHERE status IN ('new','in_progress','waiting_user')"
+            )
             now = time.time()
             self.db.execute(
                 """UPDATE users SET first_seen_at=COALESCE(
@@ -241,6 +288,30 @@ class Store:
             self.db.execute(
                 "CREATE INDEX IF NOT EXISTS unread_customer_messages ON messages(ticket_id,id) WHERE role='user'"
             )
+
+    def terms_state(self, user_id):
+        return self.db.execute("SELECT * FROM user_terms WHERE user_id=?", (user_id,)).fetchone()
+
+    def mark_terms_page(self, user_id, version, page):
+        with self.db:
+            self.db.execute(
+                """INSERT INTO user_terms(user_id,viewed_version,viewed_page) VALUES(?,?,?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                viewed_page=CASE WHEN viewed_version=excluded.viewed_version
+                    THEN MAX(viewed_page,excluded.viewed_page) ELSE excluded.viewed_page END,
+                viewed_version=excluded.viewed_version""",
+                (user_id, version, page),
+            )
+
+    def accept_terms(self, user_id, version, final_page):
+        with self.db:
+            changed = self.db.execute(
+                """UPDATE user_terms SET accepted_version=?,accepted_at=?
+                WHERE user_id=? AND viewed_version=? AND viewed_page=?
+                AND (accepted_version IS NULL OR accepted_version<>?)""",
+                (version, time.time(), user_id, version, final_page, version),
+            ).rowcount
+        return bool(changed)
 
     @staticmethod
     def _code(value: str):
@@ -291,7 +362,7 @@ class Store:
         row = self.db.execute(
             """SELECT t.id,t.user_id,u.chat_id,u.display_name,u.username,t.status,
             t.version,t.created_at,t.updated_at,t.service_code,t.plan_code,t.price_usd,t.demo_network,t.waiting_since,
-            t.payment_stage,
+            t.payment_stage,t.kind,
             EXISTS(SELECT 1 FROM payment_proofs p JOIN messages pm ON pm.id=p.message_id
                 WHERE pm.ticket_id=t.id) has_payment_proof,
             (SELECT COUNT(*) FROM messages m WHERE m.ticket_id=t.id AND m.role='user' AND m.id>t.last_read_id) unread
@@ -322,18 +393,20 @@ class Store:
                 COUNT(DISTINCT CASE WHEN ta.ticket_id IS NOT NULL THEN a.user_id END) requested_users,
                 COUNT(ta.ticket_id) tickets
                 FROM user_acquisition a
-                LEFT JOIN tickets t ON t.user_id=a.user_id
+                LEFT JOIN tickets t ON t.user_id=a.user_id AND t.kind='order'
                 LEFT JOIN ticket_acquisition ta ON ta.ticket_id=t.id AND ta.source_code=a.source_code
                 {where} GROUP BY a.source_code ORDER BY tickets DESC,started_users DESC,a.source_code""",
             excluded,
         ).fetchall()
         return [dict(row) for row in rows if row["source_code"] in SOURCES]
 
-    def for_user(self, user_id: int, active_only: bool = False) -> Ticket | None:
-        sql = "SELECT id FROM tickets WHERE user_id=?"
+    def for_user(self, user_id: int, active_only: bool = False, *, kind: str = "order") -> Ticket | None:
+        if kind not in {"order", "wholesale"}:
+            raise ValueError("Неизвестный тип переписки.")
+        sql = "SELECT id FROM tickets WHERE user_id=? AND kind=?"
         if active_only:
             sql += " AND status IN ('new','in_progress','waiting_user')"
-        row = self.db.execute(sql + " ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
+        row = self.db.execute(sql + " ORDER BY id DESC LIMIT 1", (user_id, kind)).fetchone()
         return self.ticket(row["id"]) if row else None
 
     def create_ticket(
@@ -342,20 +415,32 @@ class Store:
         service_code: str = "claude",
         plan_code: str = "standard",
         price_usd: str | Decimal | None = None,
+        *, kind: str = "order",
     ) -> tuple[Ticket, bool]:
+        if kind not in {"order", "wholesale"}:
+            raise ValueError("Неизвестный тип переписки.")
+        if kind == "wholesale":
+            service_code, plan_code, price_usd = "wholesale", "standard", None
         service_code = self._code(service_code)
         plan_code = self._code(plan_code)
         price_usd = self._price(price_usd)
         with self.transaction():
-            current = self.for_user(user_id, active_only=True)
+            current = self.for_user(user_id, active_only=True, kind=kind)
             if current:
                 return current, False
             now = time.time()
             cursor = self.db.execute(
                 """INSERT INTO tickets(user_id,status,created_at,updated_at,consent_at,service_code,
-                plan_code,price_usd,waiting_since,payment_stage)
-                VALUES(?,'new',?,?,?,?,?,?,?,'not_requested')""",
-                (user_id, now, now, now, service_code, plan_code, price_usd, now),
+                plan_code,price_usd,waiting_since,payment_stage,kind)
+                VALUES(?,'new',?,?,?,?,?,?,?,?,?)""",
+                (user_id, now, now, now, service_code, plan_code, price_usd, now,
+                 "legacy" if kind == "wholesale" else "not_requested", kind),
+            )
+            self.db.execute(
+                """INSERT INTO ticket_terms(ticket_id,version,accepted_at)
+                SELECT ?,accepted_version,accepted_at FROM user_terms
+                WHERE user_id=? AND accepted_version IS NOT NULL""",
+                (cursor.lastrowid, user_id),
             )
             self.db.execute(
                 """INSERT INTO ticket_acquisition(ticket_id,source_code)
@@ -367,12 +452,146 @@ class Store:
                 VALUES(?,'system',?,?,?)""",
                 (
                     cursor.lastrowid,
+                    "Открыто обсуждение опта." if kind == "wholesale" else
                     "Заказ создан. Пользователь подтвердил проверку своего аккаунта на собственные данные.",
                     user_id,
                     now,
                 ),
             )
             return self.ticket(cursor.lastrowid), True
+
+    def customer_focus(self, user_id: int) -> Ticket | None:
+        row = self.db.execute("SELECT ticket_id FROM customer_focus WHERE user_id=?", (user_id,)).fetchone()
+        ticket = self.ticket(row["ticket_id"]) if row else None
+        return ticket if ticket and ticket.user_id == user_id and ticket.status in OPEN_STATUSES else None
+
+    def set_customer_focus(self, user_id: int, ticket_id: int):
+        ticket = self.ticket(ticket_id)
+        if not ticket or ticket.user_id != user_id or ticket.status not in OPEN_STATUSES:
+            raise StaleTicket("Эта переписка недоступна.")
+        with self.db:
+            self.db.execute(
+                "INSERT INTO customer_focus(user_id,ticket_id) VALUES(?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET ticket_id=excluded.ticket_id",
+                (user_id, ticket_id),
+            )
+        return ticket
+
+    def clear_customer_focus(self, user_id: int):
+        with self.db:
+            self.db.execute("DELETE FROM customer_focus WHERE user_id=?", (user_id,))
+
+    def review(self, ticket_id: int):
+        return self.db.execute("SELECT * FROM reviews WHERE ticket_id=?", (ticket_id,)).fetchone()
+
+    def pending_review(self, user_id: int):
+        return self.db.execute(
+            "SELECT * FROM reviews WHERE user_id=? AND finished_at IS NULL ORDER BY created_at DESC,ticket_id DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+
+    def rate_ticket(self, ticket_id: int, user_id: int, stars: int):
+        if not isinstance(stars, int) or isinstance(stars, bool) or not 1 <= stars <= 5:
+            raise ValueError("Выберите оценку от 1 до 5.")
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            ticket = self.ticket(ticket_id)
+            if not ticket or ticket.user_id != user_id or ticket.kind != "order" or ticket.status != "resolved":
+                raise StaleTicket("Оценить можно только свой выполненный заказ.")
+            previous = self.review(ticket_id)
+            if previous and previous["finished_at"] is not None:
+                if previous["stars"] != stars:
+                    raise StaleTicket("Отзыв уже отправлен.")
+                return previous
+            self.db.execute(
+                """INSERT INTO reviews(ticket_id,user_id,stars,created_at) VALUES(?,?,?,?)
+                ON CONFLICT(ticket_id) DO UPDATE SET stars=excluded.stars""",
+                (ticket_id, user_id, stars, time.time()),
+            )
+            return self.review(ticket_id)
+
+    def review_source(self, chat_id: int, message_id: int):
+        return self.db.execute(
+            "SELECT * FROM reviews WHERE source_chat=? AND source_message=?", (chat_id, message_id),
+        ).fetchone()
+
+    def finish_review(self, ticket_id: int, user_id: int, comment: str | None = None,
+                      *, source_chat: int | None = None, source_message: int | None = None):
+        if (source_chat is None) != (source_message is None):
+            raise ValueError("Укажите источник комментария полностью.")
+        if source_chat is not None:
+            self._positive_id(source_chat)
+            self._positive_id(source_message)
+            if source_chat != user_id:
+                raise StaleTicket("Комментарий должен принадлежать автору отзыва.")
+        if comment is not None:
+            if not isinstance(comment, str) or len(comment) > 2400:
+                raise ValueError("Комментарий должен содержать не более 2400 символов.")
+            comment = comment.strip() or None
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            if source_chat is not None:
+                source = self.review_source(source_chat, source_message)
+                if source and (source["ticket_id"] != ticket_id or source["user_id"] != user_id):
+                    raise StaleTicket("Это сообщение уже использовано для другого отзыва.")
+            ticket = self.ticket(ticket_id)
+            previous = self.review(ticket_id)
+            if not ticket or ticket.user_id != user_id or ticket.kind != "order" or ticket.status != "resolved" or not previous:
+                raise StaleTicket("Сначала выберите оценку выполненного заказа.")
+            if previous["finished_at"] is not None:
+                if previous["comment"] != comment:
+                    raise StaleTicket("Отзыв уже отправлен.")
+                return previous
+            self.db.execute(
+                "UPDATE reviews SET comment=?,finished_at=?,source_chat=?,source_message=? WHERE ticket_id=?",
+                (comment, time.time(), source_chat, source_message, ticket_id),
+            )
+            return self.review(ticket_id)
+
+    def map_review_reply(self, user_id: int, message_id: int, ticket_id: int):
+        self._positive_id(message_id)
+        ticket = self.ticket(ticket_id)
+        review = self.review(ticket_id)
+        if (
+            not ticket or ticket.user_id != user_id or ticket.kind != "order" or ticket.status != "resolved"
+            or not review or review["finished_at"] is not None
+        ):
+            raise StaleTicket("Комментарий к этому отзыву недоступен.")
+        with self.db:
+            self.db.execute(
+                "INSERT INTO review_reply_targets(user_id,message_id,ticket_id) VALUES(?,?,?) "
+                "ON CONFLICT(user_id,message_id) DO UPDATE SET ticket_id=excluded.ticket_id",
+                (user_id, message_id, ticket_id),
+            )
+
+    def review_reply_ticket(self, user_id: int, message_id: int) -> Ticket | None:
+        row = self.db.execute(
+            "SELECT ticket_id FROM review_reply_targets WHERE user_id=? AND message_id=?",
+            (user_id, message_id),
+        ).fetchone()
+        ticket = self.ticket(row["ticket_id"]) if row else None
+        # Keep the original target after submission so a late Reply cannot reach another chat.
+        return ticket if ticket and ticket.user_id == user_id and ticket.kind == "order" and ticket.status == "resolved" else None
+
+    def attach_message(self, message_id: int, file_id: str, file_kind: str):
+        if not isinstance(file_id, str) or not file_id.strip() or len(file_id) > 1024 or file_kind not in {
+            "photo", "document", "voice", "video", "audio", "animation", "video_note", "sticker",
+        }:
+            raise ValueError("Неподдерживаемое вложение.")
+        with self.db:
+            previous = self.attachment(message_id)
+            if previous:
+                if (previous["file_id"], previous["file_kind"]) != (file_id, file_kind):
+                    raise StaleTicket("Вложение сообщения уже сохранено.")
+                return previous
+            self.db.execute(
+                "INSERT INTO chat_attachments(message_id,file_id,file_kind) VALUES(?,?,?)",
+                (message_id, file_id, file_kind),
+            )
+            return self.attachment(message_id)
+
+    def attachment(self, message_id: int):
+        return self.db.execute("SELECT * FROM chat_attachments WHERE message_id=?", (message_id,)).fetchone()
 
     def profile(self, user_id: int) -> ClientProfile | None:
         row = self.db.execute(
@@ -382,7 +601,7 @@ class Store:
                 SUM(CASE WHEN t.status='resolved' THEN 1 ELSE 0 END) resolved_tickets,
                 SUM(CASE WHEN t.status='cancelled' THEN 1 ELSE 0 END) cancelled_tickets,
                 MAX(t.id) latest_ticket_id
-                FROM users u LEFT JOIN tickets t ON t.user_id=u.id WHERE u.id=? GROUP BY u.id""",
+                FROM users u LEFT JOIN tickets t ON t.user_id=u.id AND t.kind='order' WHERE u.id=? GROUP BY u.id""",
             (user_id,),
         ).fetchone()
         return ClientProfile(**dict(row)) if row else None
@@ -711,9 +930,10 @@ class Store:
             )
             if status not in OPEN_STATUSES:
                 self.db.execute("DELETE FROM operator_claims WHERE ticket_id=?", (ticket_id,))
+                # Retain the closed selection so routing cannot silently switch to another conversation.
             self.db.execute(
                 "INSERT INTO messages(ticket_id,role,body,actor_id,created_at) VALUES(?,'system',?,?,?)",
-                (ticket_id, f"Статус: {STATUS_NAMES[status]}", actor_id, now),
+                (ticket_id, f"Статус: {ticket_status(self.ticket(ticket_id))}", actor_id, now),
             )
             return self.ticket(ticket_id)
 
@@ -727,7 +947,7 @@ class Store:
         """Validate a payment operation while its caller holds the write transaction."""
         ticket = self.ticket(ticket_id)
         if (
-            not ticket or ticket.version != version
+            not ticket or ticket.version != version or ticket.kind != "order"
             or ticket.status != "new" or ticket.payment_stage != stage
         ):
             raise StaleTicket("Заказ уже изменился. Откройте актуальную карточку.")
@@ -769,7 +989,7 @@ class Store:
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             ticket = self.ticket(ticket_id)
-            if not ticket or ticket.user_id != actor_id or ticket.chat_id != chat_id:
+            if not ticket or ticket.user_id != actor_id or ticket.chat_id != chat_id or ticket.kind != "order":
                 raise StaleTicket("Этот заказ недоступен.")
             previous = self.find_source(chat_id, message_id)
             if previous:

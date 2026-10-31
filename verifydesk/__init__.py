@@ -1,1 +1,1 @@
-"""Native Telegram support for users verifying their own Claude accounts."""
+"""Native Telegram support for users verifying their own platform accounts."""

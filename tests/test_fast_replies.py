@@ -7,7 +7,6 @@ import pytest
 from telegram.error import Forbidden, TimedOut
 
 from verifydesk import ui
-from verifydesk.store import STATUS_NAMES
 
 from .conftest import ADMIN, CLIENT, OTHER
 from .test_upgrade import buttons, callbacks, last, order, sent
@@ -47,15 +46,17 @@ async def test_next_opens_reply_immediately_and_success_updates_both_sides(env):
     await env.message(ADMIN, "Уточните текст ошибки", reply_to=prompt_id)
     current = env.store.ticket(ticket.id)
     assert current.status == "waiting_user"
-    assert env.store.claim_owner(ticket.id) is None
+    assert env.store.claim_owner(ticket.id) == ADMIN
+    assert env.store.focused_ticket(ADMIN).id == ticket.id
     assert "Уточните текст ошибки" in last(env, CLIENT)["text"]
-    assert STATUS_NAMES["waiting_user"] in last(env, CLIENT)["text"]
+    assert ui.conversation_title(ticket) in last(env, CLIENT)["text"]
     assert ui.admin_status("waiting_user") in last(env, ADMIN)["text"]
     assert f"a:next:{ticket.id}" in callbacks(last(env, ADMIN))
 
     await env.message(CLIENT, "Теперь вижу другой текст")
     assert env.store.ticket(ticket.id).status == "in_progress"
-    assert env.store.queue_count() == 1
+    assert env.store.queue_count(ADMIN) == 1
+    assert env.store.queue_count() == 0  # Other operators cannot take this selected conversation.
 
 
 async def test_reply_to_receipt_can_continue_without_opening_ticket_again(env):
@@ -170,6 +171,9 @@ async def test_old_notification_cannot_send_a_second_operators_stale_reply(env):
 
     await env.message(ADMIN, "Первый оператор уже ответил", reply_to=first_notification)
     assert env.store.ticket(ticket.id).status == "waiting_user"
+    assert env.store.claim_owner(ticket.id) == ADMIN
+    await env.callback(ADMIN, "a:home")  # Explicitly finish the first operator's consecutive-reply session.
+    assert env.store.claim_owner(ticket.id) is None
     before_client = len(sent(env, CLIENT))
     await env.message(SECOND_ADMIN, "Устаревший параллельный ответ", reply_to=second_notification)
     assert len(sent(env, CLIENT)) == before_client
@@ -209,16 +213,18 @@ async def test_failed_delivery_keeps_operator_turn_and_claim(env, error, state):
     assert ui.admin_status("waiting_user") not in last(env, ADMIN)["text"]
 
 
-async def test_client_ticket_and_retired_details_show_reply_and_unpaid_cancel(env):
+async def test_client_ticket_and_retired_details_allow_direct_chat_and_unpaid_cancel(env):
     ticket = await order(env)
     screen = last(env, CLIENT)
     data = callbacks(screen)
     assert len(buttons(screen)) == 2
     assert len(screen["text"]) <= 450
-    assert f"c:write:{ticket.id}" in data
+    assert "прямо в этот чат" in screen["text"]
+    assert "c:home" in data
+    assert not any(value.startswith(("c:write:", "c:proof_prompt:", "c:send_draft:")) for value in data)
     assert not any(value.startswith(("c:pay:", "c:details:")) for value in data)
     await env.callback(CLIENT, f"c:details:{ticket.id}")
-    assert callbacks(last(env, CLIENT)) == [f"c:write:{ticket.id}", f"c:cancel:{ticket.id}:{ticket.version}"]
+    assert callbacks(last(env, CLIENT)) == [f"c:cancel:{ticket.id}:{ticket.version}", "c:home"]
     await env.message(CLIENT, "/cancel")
     assert any(v.startswith(f"c:close:{ticket.id}:") for v in callbacks(last(env, CLIENT)))
     # A customer cannot use another person's details screen to read their request.

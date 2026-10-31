@@ -10,90 +10,85 @@ from .store import OPEN_STATUSES, ticket_status
 
 def catalog_card():
     return (
-        "<b>💬 Помощь с Claude</b>\n\n"
-        "Инструкции и помощь с ошибками проверки своего аккаунта.\n\n"
-        "Откройте условия, чтобы выбрать регион и посмотреть цену.",
+        "<b>✨ Каталог услуг</b>\n\n"
+        "Помогаем с верификацией вашего аккаунта. Выберите раздел, чтобы посмотреть услуги и цены.\n\n"
+        "📍 Гео уточняйте у оператора.\n💬 По оптовым заказам — отдельная переписка с оператором.",
         ui.Keyboard(
-            [
-                [ui.action("🛍 Оформить заказ", "c:service:claude")],
-                [ui.action("🏠 Меню", "c:home")],
-            ]
+            [[ui.action(title, f"c:category:{code}")] for code, title in catalog.CATEGORIES.items()]
+            + [[ui.action("🤝 Обсудить опт", "c:wholesale")],
+               [ui.action("📦 Мои заказы", "c:profile"), ui.action("🏠 Меню", "c:home")]]
         ),
     )
 
 
+def category_card(category):
+    title = catalog.CATEGORIES[category]
+    offers = [o for o in catalog.OFFERS.values() if o.category == category]
+    lines = [f"<b>{title}</b>", ""]
+    rows = []
+    for selected in offers:
+        unavailable = " · недоступно" if not selected.available else ""
+        lines.append(f"<b>{escape(selected.title)}</b> — {catalog.offer_price(selected)}{unavailable}")
+        rows.append([ui.action(
+            f"{selected.title} · {catalog.offer_price(selected)}{unavailable}",
+            f"c:service:{selected.service}",
+        )])
+    lines += ["", "📍 Гео уточняйте у оператора.", "💬 Условия и доступность согласуем до оплаты."]
+    rows.append([ui.action("← Все разделы", "c:catalog")])
+    return "\n".join(lines), ui.Keyboard(rows)
+
+
 def service_card(service):
-    if service != "claude":
-        raise ValueError("Unknown service")
-    return (
-        "<b>🛍 Заказ · помощь с Claude</b>\n\n"
-        "Выберите вашу страну проживания.\n"
-        "Цена — за сопровождение, подписка Claude отдельно.",
-        ui.Keyboard([
-            [ui.action("🇦🇲 Армения · $35", "c:offer:claude:armenia")],
-            [ui.action("🌍 Европа · $50", "c:offer:claude:europe")],
-            [ui.action("← Назад", "c:home")],
-        ]),
-    )
+    return offer_card(catalog.offer(service, "standard"))
 
 
 def offer_card(offer):
-    text = f"<b>🛍 {escape(offer.title)}{' · ДЕМО' if offer.demo else ''}</b>\n\n"
-    if offer.demo:
-        text += "Доступность и стоимость пока не подтверждены. Уточним у оператора."
-        label = "Спросить о доступности"
-    else:
-        geo = "Армения" if offer.plan == "armenia" else "Европа — страну уточнит оператор"
-        text += (
-            "Помощь с KYC вашего аккаунта Claude.\n\n"
-            f"📍 <b>Гео:</b> {geo}\n"
-            f"💵 <b>Сопровождение:</b> {catalog.dollars(offer.price_usd)}\n\n"
-            "<b>Подписка не входит в стоимость.</b> Подписку Claude вы оплачиваете самостоятельно.\n\n"
-            "💬 Оператор сообщит условия оплаты и порядок действий в этом чате.\n"
-        )
-        if offer.price_usd is None:
-            text += "Оператор сообщит цену до начала работы.\n"
-        text += "\n🔒 Проверку вы проходите сами на свои данные. Документы — только в официальном сервисе."
-        label = (
-            f"🛍 Оформить заказ · {catalog.dollars(offer.price_usd)}" if offer.price_usd else "Уточнить условия"
-        )
-    text += "\n\nСоздание заказа — без списаний. Оформляя заказ, вы подтверждаете, что аккаунт ваш."
-    return text, ui.Keyboard(
-        [
-            [ui.action(label, f"c:order:{offer.service}:{offer.plan}", "primary")],
-            [ui.action("← Выбор региона", "c:service:claude")]
-            if offer.service == "claude"
-            else [ui.action("← К услугам", "c:catalog")],
-        ]
+    text = (
+        f"<b>{catalog.CATEGORIES[offer.category].split()[0]} {escape(offer.title)}</b>\n\n"
+        f"{escape(offer.detail)}\n\n"
+        f"💵 <b>Стоимость:</b> {catalog.offer_price(offer)}\n"
+        "📍 Гео уточняйте у оператора.\n\n"
     )
+    rows = []
+    if not offer.available:
+        text += "⛔ Сервис прекратил работу. Новые заказы на верификацию не принимаются."
+    else:
+        if offer.price_from:
+            text += "Итоговую стоимость согласуйте с оператором до оплаты.\n\n"
+        if offer.service == "claude":
+            text += "<b>Подписка не входит в стоимость.</b> Подписку Claude вы оплачиваете самостоятельно.\n\n"
+        text += (
+            "💬 Оператор примет сделку и отправит вам реквизиты.\n\n"
+            "🔒 Проверку вы проходите сами на свои данные. Документы — только в официальном сервисе.\n\n"
+            "Создание заказа — без списаний. Оформляя заказ, вы подтверждаете, что аккаунт ваш."
+        )
+        rows.append([ui.action(
+            f"🛍 Оформить заказ · {catalog.offer_price(offer)}", f"c:order:{offer.service}:{offer.plan}",
+        )])
+    rows.append([ui.action("← К разделу", f"c:category:{offer.category}")])
+    return text, ui.Keyboard(rows)
 
 
 def guide(service="general"):
-    if service == "claude":
-        return ui.INSTRUCTIONS
-    if service != "general":
+    if service != "general" and (service, "standard") not in catalog.OFFERS:
         raise ValueError("Service unavailable")
+    title = "Как оформить заказ" if service == "general" else catalog.service_title(service, "standard")
     return (
-        "<b>💬 Как мы помогаем с Claude</b>\n\n"
-        "1️⃣ Выберите регион и оформите заказ.\n"
-        "2️⃣ Оператор примет заказ и пришлёт тестовые реквизиты.\n"
-        "3️⃣ Отправьте тестовый скриншот или ссылку на подтверждение.\n"
-        "4️⃣ После подтверждения оплаты заказ перейдёт в работу. Дождитесь инструкции оператора.\n\n"
-        "💳 Сейчас оплата в демо-режиме — деньги не переводите.\n"
-        "💬 Вопросы можно писать прямо в этот чат.\n\n"
-        "Проверку вы проходите сами на свои данные в Claude. "
-        "Документы, селфи и ссылку проверки сюда не отправляйте."
+        f"<b>📋 {escape(title)} · инструкция</b>\n\n"
+        "1️⃣ Выберите услугу и оформите заказ. Гео уточняйте у оператора.\n"
+        "2️⃣ Оператор примет сделку и отправит вам реквизиты.\n"
+        "3️⃣ После оплаты просто пришлите чек в этот чат — фото, файл или ссылку.\n"
+        "4️⃣ Оператор получит сообщение и проверит оплату. Бот сообщит: «Оплата подтверждена. Ожидайте сообщения от оператора».\n\n"
+        "🔒 Проверку проходите самостоятельно на свои данные в официальном сервисе. "
+        "Ссылку KYC, документы, селфи, пароли и коды входа сюда не отправляйте."
+        + ("\n\n💡 Подписка Claude оплачивается отдельно." if service == "claude" else "")
     )
 
 
 def unavailable_service():
     return (
-        "<b>Сейчас доступна только помощь с Claude</b>\n\n"
-        "Эта услуга отключена. История прежних заказов сохранена в вашей карточке.",
-        ui.Keyboard([
-            [ui.action("🛍 Оформить заказ", "c:service:claude")],
-            [ui.action("📦 Мои заказы", "c:profile"), ui.action("🏠 Меню", "c:home")],
-        ]),
+        "<b>⛔ Услуга недоступна</b>\n\nВыберите другое направление в каталоге. История прежних заказов сохранена.",
+        ui.Keyboard([[ui.action("✨ Каталог услуг", "c:catalog")], [ui.action("📦 Мои заказы", "c:profile")]]),
     )
 
 
@@ -105,7 +100,7 @@ def profile_card(profile, current, timezone, admin=False):
         text += f" · @{escape(profile.username)}"
     if current:
         text += (
-            f"\n\n<b>Сейчас</b>\n{catalog.service_title(current.service_code, current.plan_code)}"
+            f"\n\n<b>📌 Текущий заказ</b>\n{catalog.service_title(current.service_code, current.plan_code)}"
             f" · {catalog.dollars(current.price_usd)}\n№{current.id:04d} · {ticket_status(current)}"
         )
     else:
@@ -119,14 +114,14 @@ def profile_card(profile, current, timezone, admin=False):
     if current:
         rows.append([ui.action("📦 Открыть заказ", f"{prefix}:view:{current.id}", "primary")])
     elif not admin:
-        rows.append([ui.action("🛍 Оформить заказ", "c:service:claude")])
+        rows.append([ui.action("🛍 Оформить заказ", "c:catalog")])
     history_button = (
         [ui.action("🗂 История заказов", f"{prefix}:orders:{profile.id}:0" if admin else "c:orders:0")]
         if profile.total_tickets else []
     )
     if admin:
         note = escape(profile.operator_note) if profile.operator_note else "Пока нет."
-        text += f"\n\n<b>Личная заметка · только вам</b>\n{note}"
+        text += f"\n\n<b>📝 Личная заметка · только вам</b>\n{note}"
         rows += [
             history_button + [ui.action("📝 Заметка", f"a:note:{profile.id}")],
             [ui.action("← К клиентам", "a:clients:0"), ui.action("🏠 Кабинет", "a:home")],

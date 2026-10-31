@@ -7,7 +7,7 @@ from telegram import Update
 from telegram.request import BaseRequest
 
 from verifydesk.bot import build_application
-from verifydesk import catalog
+from verifydesk import catalog, rules
 from verifydesk.config import Config
 from verifydesk.store import Store
 
@@ -93,10 +93,20 @@ async def env(store, tmp_path):
     await app.initialize()
     ids = count(1)
 
+    def returning_customer(uid):
+        # Most scenarios start after onboarding; gate tests opt into a fresh customer.
+        if result.require_terms:
+            return
+        store.remember_user(uid, uid, f"Клиент {uid}", f"user{uid}")
+        store.mark_terms_page(uid, rules.VERSION, len(rules.PAGES) - 1)
+        store.accept_terms(uid, rules.VERSION, len(rules.PAGES) - 1)
+
     async def message(
         uid, text=None, reply_to=None, photo=False, edited=False, message_id=None, chat_type="private",
         caption=None, document=None, entities=None,
     ):
+        if chat_type == "private":
+            returning_customer(uid)
         user = {"id": uid, "is_bot": False, "first_name": f"Клиент {uid}", "username": f"user{uid}"}
         number = next(ids)
         data = {
@@ -133,6 +143,8 @@ async def env(store, tmp_path):
         await app.process_update(update)
 
     async def callback(uid, data, card=500, chat_type="private"):
+        if chat_type == "private":
+            returning_customer(uid)
         number = next(ids)
         update = Update.de_json(
             {
@@ -163,13 +175,18 @@ async def env(store, tmp_path):
 
     async def proof(uid, text=None, **kwargs):
         await message(uid, text, **kwargs)
-        draft = store.draft(uid)
-        assert draft is not None and draft["kind"] == "proof"
-        await confirm_draft(uid)
+        assert store.draft(uid) is None
+        submitted = store.db.execute(
+            "SELECT m.* FROM messages m JOIN payment_proofs p ON p.message_id=m.id "
+            "WHERE m.actor_id=? AND m.source_chat=? ORDER BY m.id DESC LIMIT 1", (uid, uid),
+        ).fetchone()
+        assert submitted is not None
+        if kwargs.get("message_id"):
+            assert submitted["source_message"] == kwargs["message_id"]
 
     result = SimpleNamespace(
         store=store, app=app, request=request, message=message, callback=callback, errors=errors,
-        proof=proof, confirm_draft=confirm_draft,
+        proof=proof, confirm_draft=confirm_draft, require_terms=False,
     )
     yield result
     await app.shutdown()

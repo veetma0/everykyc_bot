@@ -35,14 +35,15 @@ async def test_same_admin_can_complete_real_client_flow_then_answer_as_operator(
     await env.message(ADMIN, '/client')
     assert env.store.operator_mode(ADMIN) == 'client'
     assert 'a:mode:admin' in callbacks(last(env, ADMIN))
-    assert 'c:offer:claude:armenia' not in callbacks(last(env, ADMIN))
+    assert 'c:offer:claude:standard' not in callbacks(last(env, ADMIN))
+    await press(env, 'c:catalog')
+    await press(env, 'c:category:other')
     await press(env, 'c:service:claude')
-    await press(env, 'c:offer:claude:armenia')
-    assert '$35' in last(env, ADMIN)['text']
+    assert '$45' in last(env, ADMIN)['text']
     before = len(sent(env, ADMIN))
-    await press(env, 'c:order:claude:armenia')
+    await press(env, 'c:order:claude:standard')
     ticket = env.store.for_user(ADMIN)
-    assert (ticket.service_code, ticket.plan_code, ticket.price_usd) == ('claude', 'armenia', '35.00')
+    assert (ticket.service_code, ticket.plan_code, ticket.price_usd) == ('claude', 'standard', '45.00')
     assert len(sent(env, ADMIN)) == before + 1  # No self-admin notification in the client flow.
     assert 'a:reply:' not in ' '.join(callbacks(last(env, ADMIN)))
 
@@ -51,7 +52,8 @@ async def test_same_admin_can_complete_real_client_flow_then_answer_as_operator(
     assert [row['body'] for row in user_rows(env, ticket.id)] == ['На шаге проверки появилась ошибка']
     assert env.store.ticket(ticket.id).unread == 1
     assert len(sent(env, ADMIN)) == before + 1
-    await press(env, f'c:view:{ticket.id}')
+    await env.message(ADMIN, '/status')
+    assert f'№{ticket.id:04d}' in last(env, ADMIN)['text']
     assert not any(value.startswith("c:pay:") for value in callbacks(last(env, ADMIN)))
     await press(env, 'a:mode:admin')
     assert env.store.operator_mode(ADMIN) == 'admin'
@@ -96,7 +98,7 @@ async def test_mode_survives_database_reopen_and_start_respects_it(env):
     assert reopened.operator_mode(ADMIN) == 'client'
     reopened.close()
     await env.message(ADMIN, '/start')
-    assert 'c:service:claude' in callbacks(last(env, ADMIN))
+    assert 'c:catalog' in callbacks(last(env, ADMIN))
     assert 'a:mode:admin' in callbacks(last(env, ADMIN))
     await env.message(ADMIN, '/admin')
     assert env.store.operator_mode(ADMIN) == 'admin'
@@ -127,7 +129,7 @@ async def test_client_mode_rejects_old_operator_and_note_reply_context(env, kind
     await env.callback(ADMIN, callback)
     old_prompt = latest_prompt(env, kind)
     await env.message(ADMIN, '/client')
-    await env.callback(ADMIN, 'c:order:claude:armenia')
+    await env.callback(ADMIN, 'c:order:claude:standard')
     own = env.store.for_user(ADMIN)
     before_customer = len(sent(env, CLIENT))
     before_own = len(user_rows(env, own.id))
@@ -135,6 +137,8 @@ async def test_client_mode_rejects_old_operator_and_note_reply_context(env, kind
     assert len(sent(env, CLIENT)) == before_customer
     assert len(user_rows(env, own.id)) == before_own
     assert env.store.profile(CLIENT).operator_note == ''
+    assert 'c:current' in callbacks(last(env, ADMIN))
+    await env.callback(ADMIN, 'c:current')
     assert 'a:mode:admin' in callbacks(last(env, ADMIN))
     assert env.store.operator_mode(ADMIN) == 'client'
 
@@ -153,7 +157,7 @@ async def test_own_request_appears_in_admin_client_list_only_after_creation(env)
     await env.callback(ADMIN, 'a:clients:0')
     assert f'a:client:{ADMIN}' not in callbacks(last(env, ADMIN))
     await env.message(ADMIN, '/client')
-    await env.callback(ADMIN, 'c:order:claude:europe')
+    await env.callback(ADMIN, 'c:order:claude:standard')
     ticket = env.store.for_user(ADMIN)
     await env.message(ADMIN, '/admin')
     await env.callback(ADMIN, 'a:clients:0')
@@ -163,21 +167,21 @@ async def test_own_request_appears_in_admin_client_list_only_after_creation(env)
 
 async def test_switching_modes_does_not_reprice_recreate_or_close_request(env):
     await env.message(ADMIN, '/client')
-    await env.callback(ADMIN, 'c:order:claude:europe')
+    await env.callback(ADMIN, 'c:order:claude:standard')
     before = env.store.for_user(ADMIN)
     for _ in range(2):
         await env.message(ADMIN, '/admin')
         await env.message(ADMIN, '/client')
     after = env.store.for_user(ADMIN)
     assert (after.id, after.status, after.version, after.price_usd) == (
-        before.id, before.status, before.version, '50.00'
+        before.id, before.status, before.version, '45.00'
     )
     assert env.store.profile(ADMIN).total_tickets == 1
 
 
 async def test_mode_switch_does_not_make_unbound_admin_text_a_customer_message(env):
     await env.message(ADMIN, '/client')
-    await env.callback(ADMIN, 'c:order:claude:europe')
+    await env.callback(ADMIN, 'c:order:claude:standard')
     ticket = env.store.for_user(ADMIN)
     await env.message(ADMIN, '/admin')
     await env.message(ADMIN, 'Текст без выбранного получателя')
@@ -186,16 +190,22 @@ async def test_mode_switch_does_not_make_unbound_admin_text_a_customer_message(e
     assert 'a:home' in callbacks(last(env, ADMIN))
 
 
-async def test_customer_home_is_short_and_claude_geography_is_one_level_deeper(env):
+async def test_customer_home_opens_categories_then_service_without_geography(env):
     await env.message(CLIENT, '/start')
     home = last(env, CLIENT)
-    assert 'c:service:claude' in callbacks(home)
+    assert 'c:catalog' in callbacks(home)
     assert not any(value.startswith('c:offer:claude:') for value in callbacks(home))
-    assert len(buttons(home)) == 1
+    assert len(buttons(home)) == 4
+    assert 'c:wholesale' in callbacks(home)
     assert '$' not in home['text']
+    await env.callback(CLIENT, 'c:catalog')
+    assert 'c:category:other' in callbacks(last(env, CLIENT))
+    await env.callback(CLIENT, 'c:category:other')
+    assert 'c:service:claude' in callbacks(last(env, CLIENT))
     await env.callback(CLIENT, 'c:service:claude')
     geography = callbacks(last(env, CLIENT))
-    assert 'c:offer:claude:armenia' in geography and 'c:offer:claude:europe' in geography
+    assert 'c:order:claude:standard' in geography
+    assert 'Гео уточняйте у оператора' in last(env, CLIENT)['text']
     assert env.store.for_user(CLIENT) is None
 
 
@@ -203,8 +213,8 @@ async def test_rendered_action_buttons_are_neutral_in_both_roles(env):
     await env.message(ADMIN, '/start')
     await env.message(ADMIN, '/client')
     await env.callback(ADMIN, 'c:service:claude')
-    await env.callback(ADMIN, 'c:offer:claude:armenia')
-    await env.callback(ADMIN, 'c:order:claude:armenia')
+    await env.callback(ADMIN, 'c:offer:claude:standard')
+    await env.callback(ADMIN, 'c:order:claude:standard')
     ticket = env.store.for_user(ADMIN)
     await env.callback(ADMIN, f'c:pay:{ticket.id}')
     await env.callback(ADMIN, f'c:networks:{ticket.id}:usdt0:0')
@@ -224,9 +234,10 @@ async def test_rendered_action_buttons_are_neutral_in_both_roles(env):
 async def test_preview_inside_client_mode_cannot_create_request_or_change_role(env):
     await env.message(ADMIN, '/client')
     await env.message(ADMIN, '/preview')
+    await press(env, 'p:catalog')
+    await press(env, 'p:category:other')
     await press(env, 'p:service:claude')
-    await press(env, 'p:offer:claude:europe')
-    await press(env, 'p:order:claude:europe')
+    await press(env, 'p:order:claude:standard')
     assert env.store.for_user(ADMIN) is None
     assert env.store.operator_mode(ADMIN) == 'client'
     assert not env.store.db.execute('SELECT * FROM customer_reply_targets').fetchall()

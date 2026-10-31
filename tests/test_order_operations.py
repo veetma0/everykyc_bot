@@ -252,8 +252,8 @@ async def test_hidden_verification_link_in_entity_or_image_caption_is_not_forwar
 
 
 def test_offer_separates_support_from_subscription_and_instructions_keep_verification_private():
-    text, keyboard = screens.offer_card(catalog.offer("claude", "armenia"))
-    assert "📍 <b>Гео:</b> Армения" in text and "$35" in text
+    text, keyboard = screens.offer_card(catalog.offer("claude", "standard"))
+    assert "Гео уточняйте у оператора" in text and "$45" in text
     assert "<b>Подписка не входит в стоимость.</b>" in text
     assert "Подписку Claude вы оплачиваете самостоятельно" in text
     assert len([b for row in keyboard.inline_keyboard for b in row]) == 2

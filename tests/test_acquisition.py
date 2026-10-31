@@ -34,7 +34,7 @@ async def test_first_recognized_source_is_immutable_and_repeat_starts_are_unique
         {"source_code": "src_tg_post", "started_users": 1, "requested_users": 0, "tickets": 0}
     ]
     assert env.store.for_user(CLIENT) is None
-    assert "c:service:claude" in callbacks(last(env, CLIENT))
+    assert "c:catalog" in callbacks(last(env, CLIENT))
 
 
 @pytest.mark.parametrize("payload", ["", "unknown", "SRC_TG_POST", "src_tg_post extra", "src_tg_post?token=secret", "x" * 65])
@@ -42,7 +42,7 @@ async def test_invalid_payload_keeps_home_and_stores_no_free_text(env, payload):
     await env.message(CLIENT, f"/start {payload}".strip())
     assert attribution(env, CLIENT) is None
     assert env.store.for_user(CLIENT) is None
-    assert "c:service:claude" in callbacks(last(env, CLIENT))
+    assert "c:catalog" in callbacks(last(env, CLIENT))
     assert env.store.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
 
 
@@ -54,8 +54,8 @@ async def test_named_bot_start_and_later_recognized_source_after_direct_start(en
 
 async def test_ticket_snapshots_source_and_repeated_order_does_not_inflate_stats(env):
     await env.message(CLIENT, "/start src_site_alipay")
-    first = await order(env, plan="europe")
-    await order(env, plan="europe")
+    first = await order(env, service="alipay", plan="standard")
+    await order(env, service="alipay", plan="standard")
     await env.message(CLIENT, "/start src_partner")
     assert ticket_source(env.store, first.id) == "src_site_alipay"
     assert env.store.source_summary()[0]["tickets"] == 1

@@ -14,16 +14,16 @@ def texts(env, chat=None):
 
 
 async def create(env, uid=CLIENT):
-    await env.callback(uid, "c:order:claude:armenia")
+    await env.callback(uid, "c:order:claude:standard")
     return env.store.for_user(uid)
 
 
 async def test_legacy_customer_operator_flow(env):
     await env.message(CLIENT, "/start")
     assert "Эврикус" in texts(env, CLIENT)[-1]
-    assert "c:service:claude" in callbacks(last(env, CLIENT))
+    assert "c:catalog" in callbacks(last(env, CLIENT))
     await env.callback(CLIENT, "c:prepare")
-    assert "c:service:claude" in callbacks(last(env, CLIENT))
+    assert "c:category:exchanges" in callbacks(last(env, CLIENT))
     assert "c:create" not in callbacks(last(env, CLIENT))
     ticket = await create(env)
     ticket = legacy_ticket(env.store, ticket)
@@ -45,7 +45,8 @@ async def test_legacy_customer_operator_flow(env):
     assert env.store.for_user(CLIENT).status == "in_progress"  # confirmation required
     await env.callback(ADMIN, f"a:confirm:{ticket.id}:{current.version}:resolved")
     assert env.store.for_user(CLIENT).status == "resolved"
-    assert "Заказ выполнен" in texts(env, CLIENT)[-1]
+    assert any("Заказ выполнен" in text for text in texts(env, CLIENT))
+    assert {f"c:rate:{ticket.id}:{stars}" for stars in range(1, 6)} <= set(callbacks(last(env, CLIENT)))
 
 
 async def test_plain_text_requires_consent_and_ticket(env):
@@ -64,13 +65,17 @@ async def test_repeated_create_does_not_duplicate(env):
     assert len(texts(env, ADMIN)) == calls
 
 
-async def test_plain_operator_input_requires_confirmation_for_selected_customer(env):
+async def test_plain_operator_input_sends_directly_once_to_explicitly_selected_customer(env):
     ticket = await create(env)
     await env.callback(ADMIN, f"a:reply:{ticket.id}")
-    await env.message(ADMIN, "Случайный текст без Reply")
-    assert not any("Случайный" in text for text in texts(env, CLIENT))
-    assert "Пока не отправлено" in texts(env, ADMIN)[-1]
-    assert any(v.startswith("a:discard_draft:") for v in callbacks(last(env, ADMIN)))
+    await env.message(ADMIN, "Прямой ответ без Reply", message_id=915)
+    assert "Прямой ответ без Reply" in texts(env, CLIENT)[-1]
+    assert "Ответ отправлен" in texts(env, ADMIN)[-1]
+    assert env.store.draft(ADMIN) is None
+    assert env.store.focused_ticket(ADMIN).id == ticket.id
+    before = len(texts(env, CLIENT))
+    await env.message(ADMIN, "Прямой ответ без Reply", message_id=915)
+    assert len(texts(env, CLIENT)) == before
 
 
 async def test_reply_to_notification_routes_to_correct_client(env):
@@ -197,16 +202,20 @@ async def test_customer_text_is_saved_if_admin_unavailable(env):
     assert row["delivery"] == "stored"
     assert env.store.ticket(ticket.id).unread == 1
     assert f"№{ticket.id:04d}" in texts(env, CLIENT)[-1]
-    assert f"c:view:{ticket.id}" in callbacks(last(env, CLIENT))
+    assert not any(value.startswith(("c:write:", "c:proof_prompt:", "c:send_draft:"))
+                   for value in callbacks(last(env, CLIENT)))
 
 
-async def test_documents_are_not_downloaded_relayed_or_saved(env):
-    await create(env)
-    count = len(texts(env, ADMIN))
-    await env.message(CLIENT, photo=True)
-    assert len(texts(env, ADMIN)) == count
-    assert not env.store.db.execute("SELECT id FROM messages WHERE role='user'").fetchall()
+async def test_chat_photos_are_relayed_and_file_references_saved_without_downloading(env):
+    ticket = await create(env)
+    await env.message(CLIENT, photo=True, caption="Описание технической ошибки", message_id=916)
+    row = env.store.find_source(CLIENT, 916)
+    assert row["ticket_id"] == ticket.id and row["body"] == "Описание технической ошибки"
+    attachment = env.store.attachment(row["id"])
+    assert attachment["file_kind"] == "photo"
+    assert any(method == "sendPhoto" and params["chat_id"] == ADMIN for method, params in env.request.calls)
     assert not any(method == "getFile" for method, _ in env.request.calls)
+    assert env.store.draft(CLIENT) is None
 
 
 async def test_edited_messages_do_not_replace_or_duplicate_ticket_text(env):
