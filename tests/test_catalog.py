@@ -53,7 +53,8 @@ async def test_each_category_exposes_services_and_current_prices(env, category):
     for selected in catalog.OFFERS.values():
         if selected.category == category:
             assert f"c:service:{selected.service}" in callbacks(card)
-            assert catalog.offer_price(selected) in card["text"]
+            assert selected.title not in card["text"]
+            assert any(catalog.offer_price(selected) in b["text"] for row in card["reply_markup"]["inline_keyboard"] for b in row if b.get("callback_data") == f"c:service:{selected.service}")
 
 
 @pytest.mark.parametrize("service", [o.service for o in catalog.OFFERS.values() if o.available])
@@ -83,7 +84,7 @@ async def test_closed_and_retired_services_cannot_create_orders(env):
 async def test_old_geo_order_buttons_require_fresh_price_acceptance_and_preserve_history(env, plan, price):
     await env.callback(CLIENT, f"c:order:claude:{plan}")
     assert env.store.for_user(CLIENT) is None
-    assert "$45" in last(env, CLIENT)["text"]
+    assert any("$45" in b["text"] for row in last(env, CLIENT)["reply_markup"]["inline_keyboard"] for b in row)
     assert "c:order:claude:standard" in callbacks(last(env, CLIENT))
     old, _ = env.store.create_ticket(CLIENT, "claude", plan, price)
     await env.callback(CLIENT, f"c:view:{old.id}")

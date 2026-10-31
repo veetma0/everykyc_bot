@@ -39,7 +39,7 @@ async def test_same_admin_can_complete_real_client_flow_then_answer_as_operator(
     await press(env, 'c:catalog')
     await press(env, 'c:category:other')
     await press(env, 'c:service:claude')
-    assert '$45' in last(env, ADMIN)['text']
+    assert any('$45' in b['text'] for b in buttons(last(env, ADMIN)))
     before = len(sent(env, ADMIN))
     await press(env, 'c:order:claude:standard')
     ticket = env.store.for_user(ADMIN)

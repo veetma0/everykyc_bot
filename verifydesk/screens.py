@@ -28,7 +28,6 @@ def category_card(category):
     rows = []
     for selected in offers:
         unavailable = " · недоступно" if not selected.available else ""
-        lines.append(f"<b>{escape(selected.title)}</b> — {catalog.offer_price(selected)}{unavailable}")
         rows.append([ui.action(
             f"{selected.title} · {catalog.offer_price(selected)}{unavailable}",
             f"c:service:{selected.service}",
@@ -46,7 +45,6 @@ def offer_card(offer):
     text = (
         f"<b>{catalog.CATEGORIES[offer.category].split()[0]} {escape(offer.title)}</b>\n\n"
         f"{escape(offer.detail)}\n\n"
-        f"💵 <b>Стоимость:</b> {catalog.offer_price(offer)}\n"
         "📍 Гео уточняйте у оператора.\n\n"
     )
     rows = []

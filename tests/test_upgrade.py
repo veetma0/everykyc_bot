@@ -46,7 +46,7 @@ async def order(env, uid=CLIENT, service="claude", plan="standard"):
 async def test_claude_offer_shows_price_and_own_data_consent_before_one_click_order(env, plan, price):
     await env.callback(CLIENT, f"c:offer:claude:{plan}")
     offer_screen = last(env, CLIENT)
-    assert catalog.dollars(price) in offer_screen["text"]
+    assert any(catalog.dollars(price) in b["text"] for b in buttons(offer_screen))
     assert "сами на свои данные" in offer_screen["text"]
     assert "Документы — только в официальном сервисе" in offer_screen["text"]
     assert "Оформляя заказ" in offer_screen["text"] and "подтверждаете" in offer_screen["text"]
