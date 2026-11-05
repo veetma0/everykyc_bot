@@ -61,12 +61,13 @@ def operator_commands():
 def customer_commands(operator=False):
     commands = [
         BotCommand("start", "Главное меню"),
+        BotCommand("services", "Каталог услуг"),
         BotCommand("status", "Мой заказ"),
         BotCommand("profile", "Мои заказы"),
         BotCommand("help", "Помощь"),
     ]
     if operator:
-        commands.append(BotCommand("admin", "Вернуться в админку"))
+        commands.append(BotCommand("admin", "Кабинет оператора"))
     return commands
 
 
@@ -194,9 +195,14 @@ class Desk:
     def customer_keyboard(self, uid, keyboard):
         rows = list(keyboard.inline_keyboard) if isinstance(keyboard, ui.Keyboard) else []
         chats = self.customer_chats(uid)
-        if len(chats) > 1 and not any(str(b.callback_data).startswith("c:chat:") for row in rows for b in row):
+        existing = {str(b.callback_data) for row in rows for b in row}
+        legacy = [ticket for ticket in chats if ticket.kind == "wholesale"]
+        terms = self.store.terms_state(uid)
+        if legacy and terms and terms["accepted_version"] == rules.VERSION:
             focus = self.store.customer_focus(uid)
-            rows += list(ui.conversation_keyboard(chats, focus.id if focus else None).inline_keyboard)
+            missing = [ticket for ticket in chats if f"c:chat:{ticket.id}" not in existing]
+            if missing:
+                rows += list(ui.conversation_keyboard(missing, focus.id if focus else None).inline_keyboard)
         if self.is_admin(uid) and not any(b.callback_data == "a:mode:admin" for row in rows for b in row):
             rows.append([ui.action("🧑‍💻 В кабинет", "a:mode:admin")])
         return ui.Keyboard(rows) if rows else None
@@ -205,7 +211,7 @@ class Desk:
         return ui.Keyboard(
             [[ui.action("🧑‍💻 Кабинет оператора", "a:home")]]
             if admin
-            else [[ui.action("📦 Открыть заказ", "c:current")]]
+            else [[ui.action("Открыть заказ", "c:current"), ui.action("Главная", "c:home")]]
         )
 
     def preview_keyboard(self, keyboard):
@@ -235,11 +241,24 @@ class Desk:
             ticket = self.authorized_ticket(int(parts[2]), uid)
         elif len(parts) > 1 and parts[:2] == ["c", "order"]:
             ticket = self.store.for_user(uid, active_only=True)
+        elif parts[:2] in (["c", "current"], ["c", "prepare"]):
+            ticket = self.store.for_user(uid, active_only=True)
         elif parts[:2] == ["c", "wholesale"]:
             ticket = self.store.for_user(uid, active_only=True, kind="wholesale")
         elif not query and (update.effective_message.text or "").split(" ")[0] == "/status":
             ticket = self.store.customer_focus(uid) or self.store.for_user(uid, active_only=True)
-        if ticket:
+        # The visible card must identify this conversation too: a stale order
+        # callback can instead render a catalog, error or unavailable-service card.
+        visible_ticket = False
+        if ticket and isinstance(keyboard, ui.Keyboard):
+            for row in keyboard.inline_keyboard:
+                for button in row:
+                    target = str(button.callback_data).split(":")
+                    if (len(target) > 2 and target[0] == "c"
+                            and target[1] in {"history", "view", "cancel", "close", "details"}
+                            and target[2] == str(ticket.id)):
+                        visible_ticket = True
+        if ticket and visible_ticket:
             self.store.map_customer_reply(update.effective_chat.id, message.message_id, ticket.id)
 
     async def notify_customer_status(self, bot, ticket, notice=None):
@@ -284,20 +303,26 @@ class Desk:
             with self.store.db:
                 self.store.db.execute("DELETE FROM review_reply_targets WHERE user_id=? AND message_id=?",
                                       (update.effective_user.id, query.message.message_id))
-            try:
-                await query.edit_message_text(
-                    text=text, parse_mode=ParseMode.HTML, reply_markup=keyboard, disable_web_page_preview=True
-                )
-                self.map_customer_card(update, query.message, keyboard)
-                return query.message
-            except BadRequest as exc:
-                if "message is not modified" in str(exc).lower():
+            for attempt in range(2):
+                try:
+                    await query.edit_message_text(
+                        text=text, parse_mode=ParseMode.HTML, reply_markup=keyboard, disable_web_page_preview=True
+                    )
                     self.map_customer_card(update, query.message, keyboard)
                     return query.message
-            except NetworkError:
-                return None
-            except TelegramError:
-                pass
+                except BadRequest as exc:
+                    if "message is not modified" in str(exc).lower():
+                        self.map_customer_card(update, query.message, keyboard)
+                        return query.message
+                    if attempt == 0 and theme.enabled():
+                        theme.disable()
+                        text, keyboard = theme.without_custom_emoji(text, keyboard)
+                        continue
+                    break
+                except NetworkError:
+                    return None
+                except TelegramError:
+                    break
         message, _ = await deliver(context.bot, update.effective_chat.id, text, keyboard)
         self.map_customer_card(update, message, keyboard)
         return message
@@ -329,8 +354,8 @@ class Desk:
                 await self.screen(
                     update,
                     context,
-                    "Сейчас вы в режиме клиента. Для работы с клиентами вернитесь в админку.",
-                    ui.Keyboard([[ui.action("🧑‍💻 В админку", "a:mode:admin")]]),
+                    "Сейчас вы в режиме клиента. Для работы с клиентами вернитесь в кабинет оператора.",
+                    ui.Keyboard([[ui.action("В кабинет", "a:mode:admin")]]),
                 )
                 return
             if command == "/next":
@@ -348,7 +373,7 @@ class Desk:
                     update,
                     context,
                     acquisition.report(self.store.source_summary(self.config.admin_ids)),
-                    ui.Keyboard([[ui.action("🧑‍💻 В админку", "a:home")]]),
+                    ui.Keyboard([[ui.action("В кабинет", "a:home")]]),
                 )
             elif command == "/preview":
                 text, keyboard = ui.home(self.config.title, None)
@@ -365,7 +390,7 @@ class Desk:
             await self.help(update, context)
         elif command == "/privacy":
             await self.screen(
-                update, context, ui.PRIVACY, ui.Keyboard([[ui.action("🏠 Главное меню", "c:home")]])
+                update, context, ui.PRIVACY, ui.Keyboard([[ui.action("Главная", "c:home")]])
             )
         elif command == "/status":
             ticket = self.store.customer_focus(uid) or self.store.for_user(uid)
@@ -375,8 +400,9 @@ class Desk:
                 await self.screen(
                     update,
                     context,
-                    "У вас пока нет заказов.",
-                    ui.Keyboard([[ui.action("🛍 Оформить заказ", "c:catalog", "primary")]]),
+                    "<b>Активных заказов пока нет</b>\n\nВыберите услугу в каталоге или откройте историю заказов.",
+                    ui.Keyboard([[ui.action("Каталог услуг", "c:catalog")],
+                                 [ui.action("Мои заказы", "c:profile"), ui.action("Главная", "c:home")]]),
                 )
         elif command == "/cancel":
             ticket = self.store.for_user(uid, active_only=True)
@@ -400,11 +426,11 @@ class Desk:
             await self.screen(update, context, *ui.home(self.config.title, self.store.for_user(uid)))
 
     async def help(self, update, context):
+        current = self.store.for_user(update.effective_user.id, active_only=True)
         await self.screen(
             update,
             context,
-            screens.guide(),
-            ui.Keyboard([[ui.action("📦 К заказу", "c:current")]]),
+            *screens.help_card(current),
         )
 
     def admin_card(self, ticket, body=None):
@@ -492,25 +518,27 @@ class Desk:
         ticket = self.store.ticket(ticket.id)
         rows = self.store.db.execute(
             "SELECT role,body FROM messages WHERE ticket_id=? AND role IN ('user','operator') "
-            "ORDER BY id DESC LIMIT 3", (ticket.id,),
+            "ORDER BY id DESC LIMIT 2", (ticket.id,),
         ).fetchall()
         details = []
         for row in reversed(rows):
             label = "Клиент" if row["role"] == "user" else "Оператор"
-            body = ui.clip_text(row["body"], 500)
-            if ui.text_units(row["body"]) > 500:
+            body = ui.clip_text(row["body"], 180)
+            if ui.text_units(row["body"]) > 180:
                 body += "…"
             details.append(f"<b>{label}:</b> {escape(body)}")
         context_text = "\n\n".join(details) if details else "Клиент оформил заказ и ждёт ответа."
-        rows = [[ui.action("← К обращению", f"a:view:{ticket.id}"), ui.action("▶️ Другой заказ", f"a:next:{ticket.id}")]]
+        rows = [[ui.action("‹ К заказу", f"a:view:{ticket.id}"), ui.action("Следующий", f"a:next:{ticket.id}")],
+                [ui.action("В кабинет", "a:home")]]
         if ticket.payment_stage in {"legacy", "confirmed"}:
-            rows.insert(0, [ui.action("✅ Выполнен", f"a:set:{ticket.id}:{ticket.version}:resolved")])
+            rows.insert(0, [ui.action("Завершить обсуждение" if ticket.kind == "wholesale" else "Завершить заказ",
+                                       f"a:set:{ticket.id}:{ticket.version}:resolved")])
         prompt, _ = await deliver(
             context.bot, uid,
             f"<b>Ответ · {ui.conversation_title(ticket)} · {escape(ticket.display_name)}</b>\n\n"
             f"{context_text}\n\n"
             "Пишите текст, присылайте фото или файл — сообщения сразу уйдут этому клиенту.\n"
-            "Получатель закреплён до выхода из переписки. Telegram Reply позволяет ответить на конкретное обращение.",
+            "Можно писать несколько сообщений подряд. Для смены получателя откройте другой заказ.",
             ui.Keyboard(rows),
         )
         if prompt:
@@ -543,7 +571,7 @@ class Desk:
         )
         await self.screen(
             update, context, text,
-            ui.Keyboard([[ui.action("📥 Проверить очередь", "a:list:queue:0")], [ui.action("🧑‍💻 В админку", "a:home")]]),
+            ui.Keyboard([[ui.action("📥 Проверить очередь", "a:list:queue:0")], [ui.action("В кабинет", "a:home")]]),
         )
 
     async def callback(self, update, context):
@@ -598,22 +626,25 @@ class Desk:
                 update,
                 context,
                 "В предпросмотре заказы и сообщения не отправляются, выбор не сохраняется.",
-                ui.Keyboard([[ui.action("✨ К услугам", "c:catalog")]]),
+                ui.Keyboard([[ui.action("Каталог услуг", "c:catalog")]]),
             )
             return
         if not preview and verb not in {"rate", "review_skip"}:
             self.finish_pending_review(uid)
         if verb in {"wholesale", "chat"}:
             if verb == "wholesale":
-                ticket, created = self.store.create_ticket(uid, kind="wholesale")
+                # Old messages remain clickable, but cannot create retired conversations.
+                ticket = self.store.for_user(uid, active_only=True, kind="wholesale")
+                if not ticket:
+                    text, keyboard = screens.catalog_card()
+                    await self.screen(update, context, "Отдельные обсуждения опта больше не открываются.\n\n" + text, keyboard)
+                    return
             else:
-                ticket, created = self.authorized_ticket(int(parts[2]), uid), False
+                ticket = self.authorized_ticket(int(parts[2]), uid)
             if not ticket or ticket.status not in OPEN_STATUSES:
                 raise StaleTicket()
             self.store.set_customer_focus(uid, ticket.id)
             await self.screen(update, context, *ui.customer_ticket(ticket, self.config.timezone))
-            if created:
-                await self.notify_admins(context.bot, ticket)
             return
         if verb in {"rate", "review_skip"}:
             ticket = self.authorized_ticket(int(parts[2]), uid)
@@ -621,7 +652,7 @@ class Desk:
                 raise StaleTicket()
             if verb == "review_skip":
                 self.store.finish_review(ticket.id, uid)
-                await self.screen(update, context, "💛 Спасибо за оценку!", ui.Keyboard([[ui.action("🏠 Меню", "c:home")]]))
+                await self.screen(update, context, "💛 Спасибо за оценку!", ui.Keyboard([[ui.action("Главная", "c:home")]]))
             else:
                 stars = int(parts[3])
                 if not 1 <= stars <= 5:
@@ -631,7 +662,7 @@ class Desk:
                     self.finish_pending_review(uid)
                 review = self.store.rate_ticket(ticket.id, uid, stars)
                 if review["finished_at"]:
-                    await self.screen(update, context, "💛 Ваш отзыв уже сохранён.", ui.Keyboard([[ui.action("🏠 Меню", "c:home")]]))
+                    await self.screen(update, context, "💛 Ваш отзыв уже сохранён.", ui.Keyboard([[ui.action("Главная", "c:home")]]))
                 else:
                     shown = await self.screen(update, context, *ui.review_comment_card(ticket, review["stars"]))
                     if shown:
@@ -651,7 +682,8 @@ class Desk:
         elif verb == "catalog":
             await self.screen(update, context, *screens.catalog_card())
         elif verb == "category":
-            await self.screen(update, context, *screens.category_card(parts[2]))
+            page = int(parts[3]) if len(parts) > 3 else 0
+            await self.screen(update, context, *screens.category_card(parts[2], page))
         elif verb == "service":
             await self.screen(update, context, *screens.service_card(parts[2]))
         elif verb in {"offer", "order"} and (parts[2], parts[3]) not in catalog.OFFERS:
@@ -673,11 +705,11 @@ class Desk:
                     context,
                     f"<b>У вас уже есть активный заказ №{ticket.id:04d}</b>\n\n"
                     f"{catalog.service_title(ticket.service_code, ticket.plan_code)} · {catalog.dollars(ticket.price_usd)}\n\n"
-                    f"Вы выбрали {escape(selected.title)}. Напишите новый запрос в текущий заказ — оператор поможет уточнить направление. Условия текущего заказа сохранены.",
+                    f"Вы выбрали {escape(selected.title)}. Откройте текущий заказ кнопкой ниже и опишите новый запрос оператору. Условия текущего заказа сохранены.",
                     ui.Keyboard(
                         [
                             [ui.action("📦 Открыть заказ", f"c:view:{ticket.id}", "primary")],
-                            [ui.action("✨ К услугам", "c:catalog")],
+                            [ui.action("Каталог услуг", "c:catalog")],
                         ]
                     ),
                 )
@@ -692,10 +724,13 @@ class Desk:
             await self.orders_screen(update, context, uid, int(parts[2]), False)
         elif verb == "guide":
             service = parts[2]
-            if (service, "standard") not in catalog.OFFERS:
+            if service != "general" and (service, "standard") not in catalog.OFFERS:
                 raise ValueError()
             rows = []
-            if len(parts) > 3:
+            if service == "general":
+                rows.append([ui.action("Каталог услуг", "c:catalog")])
+                rows.append([ui.action("‹ Помощь", "c:help"), ui.action("Главная", "c:home")])
+            elif len(parts) > 3:
                 selected = catalog.offer(service, parts[3])
                 rows.append(
                     [
@@ -710,7 +745,7 @@ class Desk:
                     if not self.store.for_user(uid, active_only=True)
                     else "c:current"
                 )
-                rows.append([ui.action("Вернуться", target)])
+                rows.append([ui.action("‹ К заказу" if target == "c:current" else "‹ Каталог", target)])
             await self.screen(update, context, screens.guide(service), ui.Keyboard(rows))
         elif verb in {"pay", "networks", "network"}:
             ticket = self.authorized_ticket(int(parts[2]), uid)
@@ -734,7 +769,7 @@ class Desk:
             await self.help(update, context)
         elif verb == "privacy":
             await self.screen(
-                update, context, ui.PRIVACY, ui.Keyboard([[ui.action("🏠 Главное меню", "c:home")]])
+                update, context, ui.PRIVACY, ui.Keyboard([[ui.action("Главная", "c:home")]])
             )
         elif verb == "current":
             current = self.store.for_user(uid, active_only=True)
@@ -753,17 +788,17 @@ class Desk:
                 await self.screen(update, context, "Этот заказ недоступен.", self.recovery_keyboard())
                 return
             if verb in {"proof_prompt", "write", "requisites"}:
-                if ticket.status in OPEN_STATUSES:
+                if ticket.status in OPEN_STATUSES and not preview:
                     self.store.set_customer_focus(uid, ticket.id)
                 await self.screen(update, context, *ui.customer_ticket(ticket, self.config.timezone))
             elif verb == "details":
-                if ticket.status in OPEN_STATUSES:
+                if ticket.status in OPEN_STATUSES and not preview:
                     self.store.set_customer_focus(uid, ticket.id)
                 await self.screen(update, context, *ui.customer_details(ticket, self.config.timezone))
             elif verb == "history":
-                await self.show_history(update, context, ticket, int(parts[3]), False)
+                await self.show_history(update, context, ticket, int(parts[3]), False, preview=preview)
             elif verb == "message":
-                await self.full_message(update, context, ticket, int(parts[3]), False)
+                await self.full_message(update, context, ticket, int(parts[3]), False, preview=preview)
             elif verb == "cancel":
                 if ticket.status not in OPEN_STATUSES or int(parts[3]) != ticket.version:
                     raise StaleTicket()
@@ -771,7 +806,7 @@ class Desk:
                     await self.screen(
                         update, context,
                         "🔒 После отправки чека самостоятельная отмена закрыта. По этому заказу поможет оператор.",
-                        ui.Keyboard([[ui.action("🏠 Меню", "c:home")]]),
+                        ui.Keyboard([[ui.action("Главная", "c:home")]]),
                     )
                     return
                 await self.screen(
@@ -790,7 +825,7 @@ class Desk:
                 await self.screen(update, context, *ui.customer_ticket(ticket, self.config.timezone))
                 await self.notify_admins(context.bot, ticket)
             else:
-                if ticket.status in OPEN_STATUSES:
+                if ticket.status in OPEN_STATUSES and not preview:
                     self.store.set_customer_focus(uid, ticket.id)
                 await self.screen(update, context, *ui.customer_ticket(ticket, self.config.timezone))
         else:
@@ -817,8 +852,8 @@ class Desk:
             await self.screen(
                 update,
                 context,
-                "Сейчас вы в режиме клиента. Для работы с заказами вернитесь в админку.",
-                ui.Keyboard([[ui.action("🧑‍💻 В админку", "a:mode:admin")]]),
+                "Сейчас вы в режиме клиента. Для работы с заказами вернитесь в кабинет оператора.",
+                ui.Keyboard([[ui.action("В кабинет", "a:mode:admin")]]),
             )
             return
         if verb == "next":
@@ -870,6 +905,19 @@ class Desk:
             for ticket in tickets:
                 owner = self.store.claim_owner(ticket.id)
                 mark = "🔒 " if owner and owner != uid else "● " if ticket.unread else ""
+                short_status = {
+                    "new": "Новый", "in_progress": "В работе", "waiting_user": "Ждём ответ",
+                    "resolved": "Выполнен", "cancelled": "Отменён",
+                }[ticket.status]
+                if ticket.kind == "wholesale" and ticket.status in OPEN_STATUSES:
+                    short_status = "Диалог"
+                elif ticket.status == "new" and ticket.payment_stage == "review":
+                    short_status = "Чек"
+                elif ticket.status == "new" and ticket.payment_stage == "awaiting_payment":
+                    short_status = "Другой чек" if ticket.has_payment_proof else "Оплата"
+                name = ui.clip_text(ticket.display_name, 14)
+                if ui.text_units(ticket.display_name) > 14:
+                    name += "…"
                 action = "view"
                 if scope == "queue":
                     if ticket.payment_stage == "review":
@@ -877,7 +925,7 @@ class Desk:
                     elif ticket.payment_stage in {"legacy", "confirmed"}:
                         action = "reply"
                 rows.append([ui.action(
-                    f"{mark}№{ticket.id:04d} · {ticket.display_name[:24]} · {ticket_status(ticket)}",
+                    f"{mark}№{ticket.id:04d} · {name} · {short_status}",
                     f"a:{action}:{ticket.id}",
                 )])
             navigation = []
@@ -899,11 +947,13 @@ class Desk:
                 rows.append([ui.action("📋 Все заказы", "a:list:active:0")])
             rows.append([ui.action("🧑‍💻 Кабинет оператора", "a:home")])
             title = {
-                "queue": "Требуют внимания", "active": "Активные", "new": "Новые",
-                "review": "Проверка оплаты", "work": "В работе", "payment": "Ожидают оплаты", "closed": "Завершённые",
+                "queue": "Требуют внимания", "active": "Активные обращения", "new": "Новые обращения",
+                "review": "Проверка оплаты", "work": "Заказы в работе", "payment": "Ожидаем оплату или чек",
+                "closed": "Завершённые обращения",
             }[scope]
-            text = f"<b>{title} заказы · {total}</b>\n\n" + (
-                "● — новые сообщения · 🔒 — уже открыт другим менеджером." if tickets else "Здесь пока пусто."
+            text = f"<b>{title}</b>\n\n" + (
+                f"Страница {offset // 8 + 1} из {(total + 7) // 8} · Всего {total}\n"
+                "● Новые сообщения · 🔒 Отвечает другой оператор." if tickets else "Здесь пока пусто."
             )
             await self.screen(update, context, text, ui.Keyboard(rows))
             return
@@ -935,7 +985,9 @@ class Desk:
             text, keyboard = self.admin_card(ticket)
             if state != "delivered":
                 text += "\n\n⚠️ Доставка уведомления об оплате не подтверждена. Статус сохранён в заказе."
-            await self.screen(update, context, text, keyboard)
+            shown = await self.screen(update, context, text, keyboard)
+            if shown:
+                self.store.map_reply(uid, shown.message_id, ticket.id)
         elif verb == "proofs":
             await self.payment_proofs_screen(update, context, ticket, int(parts[3]) if len(parts) > 3 else 0)
         elif verb in {"confirm_payment", "reject_payment"}:
@@ -965,16 +1017,18 @@ class Desk:
                 await self.claim_conflict(update, context, ticket)
                 return
             if verb == "set" and status in {"resolved", "cancelled"}:
+                subject = "обсуждение" if ticket.kind == "wholesale" else "заказ"
+                label = f"{'Отменить' if status == 'cancelled' else 'Завершить'} {subject}"
                 await self.screen(
                     update,
                     context,
-                    f"<b>{'Отменить' if status == 'cancelled' else 'Завершить'} заказ №{ticket.id:04d}?</b>\n"
+                    f"<b>{label} №{ticket.id:04d}?</b>\n"
                     f"{escape(ticket.display_name)}\n\nКлиент получит сообщение: {STATUS_NAMES[status]}.",
                     ui.Keyboard(
                         [
                             [
                                 ui.action(
-                                    "✅ Подтвердить", f"a:confirm:{ticket.id}:{version}:{status}", "success"
+                                    label, f"a:confirm:{ticket.id}:{version}:{status}", "success"
                                 )
                             ],
                             [ui.action("Назад", f"a:view:{ticket.id}")],
@@ -1077,7 +1131,10 @@ class Desk:
             return
         current = self.store.for_user(user_id, active_only=True)
         await self.screen(
-            update, context, *screens.profile_card(profile, current, self.config.timezone, admin)
+            update, context, *screens.profile_card(
+                profile, current, self.config.timezone, admin,
+                has_history=bool(self.store.db.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user_id,)).fetchone()),
+            )
         )
 
     async def orders_screen(self, update, context, user_id, offset, admin):
@@ -1098,10 +1155,12 @@ class Desk:
         buttons = []
         for row in rows:
             ticket = self.store.ticket(row["id"])
+            title = "Переписка об опте" if ticket.kind == "wholesale" else catalog.service_title(ticket.service_code, ticket.plan_code)
+            status_icon = ticket_status(ticket).split()[0]
             buttons.append(
                 [
                     ui.action(
-                        f"№{ticket.id:04d} · {catalog.service_title(ticket.service_code, ticket.plan_code)} · {ticket_status(ticket)}",
+                        f"{status_icon} №{ticket.id:04d} · {ui.clip_text(title, 26)}",
                         f"{prefix}:view:{ticket.id}",
                     )
                 ]
@@ -1114,11 +1173,16 @@ class Desk:
             navigation.append(ui.action("Далее →", f"{base}:{offset + 8}"))
         if navigation:
             buttons.append(navigation)
-        buttons.append([ui.action("👤 К карточке", f"a:client:{user_id}" if admin else "c:profile")])
+        buttons.append([ui.action("‹ К клиенту" if admin else "‹ Мои заказы", f"a:client:{user_id}" if admin else "c:profile")])
+        if not admin:
+            buttons[-1].append(ui.action("Главная", "c:home"))
         await self.screen(
             update,
             context,
-            f"<b>🗂 История заказов · {total}</b>\n\n" + ("Выберите обращение." if rows else "Заказов пока нет."),
+            "<b>История заказов</b>\n\n" + (
+                f"Страница {offset // 8 + 1} из {(total + 7) // 8} · Всего {total}\nВыберите заказ, чтобы открыть детали и переписку."
+                if rows else "Заказов пока нет."
+            ),
             ui.Keyboard(buttons),
         )
 
@@ -1133,8 +1197,8 @@ class Desk:
             ui.Keyboard([[ui.action("🧑‍💻 Кабинет оператора", "a:home")]]),
         )
 
-    async def show_history(self, update, context, ticket, page, admin):
-        if not admin and ticket.status in OPEN_STATUSES:
+    async def show_history(self, update, context, ticket, page, admin, *, preview=False):
+        if not admin and not preview and ticket.status in OPEN_STATUSES:
             self.store.set_customer_focus(update.effective_user.id, ticket.id)
         page = max(0, page)
         _, total = self.store.messages(ticket.id)
@@ -1167,24 +1231,36 @@ class Desk:
 
         return datetime.fromtimestamp(stamp, ZoneInfo(self.config.timezone)).strftime("%d.%m %H:%M")
 
-    async def full_message(self, update, context, ticket, message_id, admin):
+    async def full_message(self, update, context, ticket, message_id, admin, *, preview=False):
         row = self.store.db.execute(
-            "SELECT id,body,role FROM messages WHERE id=? AND ticket_id=?", (message_id, ticket.id)
+            "SELECT id,body,role,created_at FROM messages WHERE id=? AND ticket_id=?", (message_id, ticket.id)
         ).fetchone()
         if not row:
             raise ValueError()
         attachment = self.store.attachment(message_id) or self.store.db.execute(
             "SELECT file_id,file_kind FROM payment_proofs WHERE message_id=? AND file_id IS NOT NULL", (message_id,),
         ).fetchone()
-        if attachment:
-            await self.relay_attachment(context.bot, update.effective_user.id, ticket,
-                attachment["file_id"], attachment["file_kind"], row["body"], operator=not admin)
+        attachment_notice = ""
+        if attachment and not preview:
+            _, delivery = await self.relay_attachment(context.bot, update.effective_user.id, ticket,
+                attachment["file_id"], attachment["file_kind"], row["body"], operator=not admin,
+                author_role=row["role"])
+            if delivery != "delivered":
+                attachment_notice = "\n\nВложение не удалось показать. Откройте сообщение ещё раз, чтобы повторить загрузку."
         prefix = "a" if admin else "c"
+        author = {"operator": "Оператор", "user": "Клиент" if admin else "Вы", "system": "Событие"}[row["role"]]
+        buttons = []
+        if attachment_notice:
+            buttons.append([ui.action("Показать вложение", f"{prefix}:message:{ticket.id}:{message_id}")])
+        buttons.append([ui.action("‹ Переписка", f"{prefix}:history:{ticket.id}:0")])
         shown = await self.screen(
             update,
             context,
-            f"<b>Заказ №{ticket.id:04d} · сообщение</b>\n\n{escape(row['body'])}",
-            ui.Keyboard([[ui.action("💬 К переписке", f"{prefix}:history:{ticket.id}:0")]]),
+            f"<b>{ui.conversation_title(ticket)} · сообщение</b>\n"
+            f"{author} · {self._stamp(row['created_at'])}\n\n{escape(row['body'])}"
+            + attachment_notice
+            + ("\n\n<i>Вложение доступно в обычном режиме заказа.</i>" if preview and attachment else ""),
+            ui.Keyboard(buttons),
         )
         if admin and shown:
             self.store.map_reply(update.effective_chat.id, shown.message_id, ticket.id)
@@ -1259,9 +1335,11 @@ class Desk:
             return f"💬 Сейчас выбран чат: {current}. Чтобы ответить по этому обращению, выберите его ниже или используйте Telegram Reply."
         return "💬 Пишите прямо сюда. Сообщения уйдут в эту переписку."
 
-    async def relay_attachment(self, bot, chat_id, ticket, file_id, file_kind, body, *, operator=False):
+    async def relay_attachment(self, bot, chat_id, ticket, file_id, file_kind, body, *, operator=False, author_role=None):
         title = ui.conversation_title(ticket)
-        header = ("Оператор · " if operator else f"{ticket.display_name} · ") + title
+        author_role = author_role or ("operator" if operator else "user")
+        author = "Оператор" if author_role == "operator" else "Вы" if operator else ticket.display_name
+        header = f"{author} · {title}"
         caption = escape(header) + ("\n\n" + escape(ui.clip_text(body, 650)) if body else "")
         if ui.text_units(body) > 650:
             caption += "\n…Полный текст — в переписке."
@@ -1318,7 +1396,7 @@ class Desk:
         if self.client_mode(uid) and reply and (
             self.store.reply_ticket(uid, reply.message_id) or self.store.note_reply_user(uid, reply.message_id)
         ):
-            await deliver(context.bot, uid, "Это ответ из админки. Сейчас вы как клиент — сообщение не отправлено.", self.customer_keyboard(uid, self.recovery_keyboard()))
+            await deliver(context.bot, uid, "Вы в режиме клиента. Ответ на сообщение из кабинета оператора не отправлен.", self.customer_keyboard(uid, self.recovery_keyboard()))
             return
         review_target = self.store.review_reply_ticket(uid, reply.message_id) if reply else None
         pending = self.store.pending_review(uid)
@@ -1329,10 +1407,15 @@ class Desk:
                 await deliver(context.bot, uid, "Этот отзыв уже сохранён. Откройте нужную переписку из меню.", self.recovery_keyboard())
                 return
             if media or not body.strip() or ui.text_units(body) > 1200:
-                await deliver(context.bot, uid, "Напишите комментарий текстом до 1200 символов или выберите «Без комментария».")
+                await deliver(
+                    context.bot, uid,
+                    "Напишите комментарий текстом до 1200 символов или сохраните только оценку.",
+                    ui.Keyboard([[ui.action("Без комментария", f"c:review_skip:{review_id}")],
+                                 [ui.action("Главная", "c:home")]]),
+                )
                 return
             self.store.finish_review(review_id, uid, body, source_chat=message.chat_id, source_message=message.message_id)
-            await deliver(context.bot, uid, "💛 Спасибо! Оценка и комментарий сохранены.", self.customer_keyboard(uid, ui.Keyboard([[ui.action("🏠 Меню", "c:home")]])))
+            await deliver(context.bot, uid, "💛 Спасибо! Оценка и комментарий сохранены.", self.customer_keyboard(uid, ui.Keyboard([[ui.action("Главная", "c:home")]])))
             return
         if reply:
             target = self.store.customer_reply_ticket(uid, reply.message_id)
@@ -1354,8 +1437,8 @@ class Desk:
                     ticket = chats[0]
                     self.store.set_customer_focus(uid, ticket.id)
                 else:
-                    text = "Выберите переписку ниже. Предыдущая переписка закрыта или выбор ещё не сделан; сообщение пока не отправлено." if chats else "Откройте услугу или раздел «Обсудить опт», затем пишите прямо сюда. Сообщение пока не отправлено."
-                    keyboard = ui.conversation_keyboard(chats) if chats else ui.Keyboard([[ui.action("✨ Услуги", "c:catalog"), ui.action("🤝 Обсудить опт", "c:wholesale")]])
+                    text = "Выберите переписку ниже. Предыдущая переписка закрыта или выбор ещё не сделан; сообщение пока не отправлено." if chats else "Сначала выберите услугу и оформите заказ. Затем пишите оператору прямо в этом чате. Это сообщение пока не отправлено."
+                    keyboard = ui.conversation_keyboard(chats) if chats else ui.Keyboard([[ui.action("Каталог услуг", "c:catalog")], [ui.action("Помощь", "c:help"), ui.action("Главная", "c:home")]])
                     await deliver(context.bot, uid, text, self.customer_keyboard(uid, keyboard))
                     return
         is_proof = ticket.kind == "order" and ticket.payment_stage in {"awaiting_payment", "review"} and (

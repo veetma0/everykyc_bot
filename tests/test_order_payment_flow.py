@@ -30,7 +30,7 @@ async def test_visible_order_journey_requires_payment_review_before_work(env):
     assert accept in callbacks(last(env, ADMIN))
     assert env.store.ticket(ticket.id).status == "new"
     await env.callback(ADMIN, accept)
-    assert "Оператор принял сделку" in last(env, CLIENT)["text"]
+    assert "Оператор принял заказ" in last(env, CLIENT)["text"]
     assert "Дождитесь реквизитов" in last(env, CLIENT)["text"]
     assert env.store.ticket(ticket.id).payment_stage == "awaiting_payment"
     before = len(sent(env, CLIENT))
@@ -147,7 +147,7 @@ async def test_failed_requisites_delivery_keeps_recoverable_payment_stage(env, e
     assert "не подтверждена" in last(env, ADMIN)["text"]
     env.request.fail_chat = None
     await env.callback(CLIENT, f"c:requisites:{ticket.id}")
-    assert "Оператор принял сделку" in last(env, CLIENT)["text"]
+    assert "Оператор принял заказ" in last(env, CLIENT)["text"]
     assert "DEMO-" not in last(env, CLIENT)["text"]
 
 

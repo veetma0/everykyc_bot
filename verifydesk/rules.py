@@ -39,19 +39,21 @@ PAGES = _pages()
 
 def card(page, *, accepted=False):
     text = (
-        f"<b>📜 Правила оказания услуг и гарантии · {page + 1}/{len(PAGES)}</b>\n\n"
-        + PAGES[page]
+        f"<b>Правила оказания услуг</b> · {page + 1}/{len(PAGES)}\n\n"
     )
+    if page == 0 and not accepted:
+        text += f"Перед началом прочитайте все {len(PAGES)} страницы. Кнопка согласия — в конце.\n\n"
+    text += PAGES[page]
     rows, navigation = [], []
     if page:
-        navigation.append(ui.action("← Назад", f"c:rules:{VERSION}:{page - 1}"))
+        navigation.append(ui.action("‹ Назад", f"c:rules:{VERSION}:{page - 1}"))
     if page + 1 < len(PAGES):
-        navigation.append(ui.action("Читать далее →", f"c:rules:{VERSION}:{page + 1}"))
+        navigation.append(ui.action("Далее ›", f"c:rules:{VERSION}:{page + 1}"))
     if navigation:
         rows.append(navigation)
     if page == len(PAGES) - 1 and not accepted:
-        text += "\n\nДля продолжения работы бота подтвердите согласие кнопкой ниже."
-        rows.append([ui.action("✅ Я прочитал и со всем согласен", f"c:agree:{VERSION}")])
+        text += "\n\nПрочитали все страницы? Подтвердите согласие с правилами, чтобы открыть каталог."
+        rows.append([ui.action("Прочитал и согласен", f"c:agree:{VERSION}")])
     if accepted:
-        rows.append([ui.action("🏠 Меню", "c:home")])
+        rows.append([ui.action("Главная", "c:home")])
     return text, ui.Keyboard(rows)

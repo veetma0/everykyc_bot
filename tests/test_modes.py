@@ -104,7 +104,8 @@ async def test_mode_survives_database_reopen_and_start_respects_it(env):
     assert env.store.operator_mode(ADMIN) == 'admin'
     await env.message(ADMIN, '/start')
     assert 'a:list:active:0' in callbacks(last(env, ADMIN))
-    assert len(callbacks(last(env, ADMIN))) == 3
+    assert len(callbacks(last(env, ADMIN))) == 4
+    assert 'a:more' in callbacks(last(env, ADMIN))
     await env.message(ADMIN, '/client')
     assert env.store.operator_mode(ADMIN) == 'client'
 
@@ -196,7 +197,8 @@ async def test_customer_home_opens_categories_then_service_without_geography(env
     assert 'c:catalog' in callbacks(home)
     assert not any(value.startswith('c:offer:claude:') for value in callbacks(home))
     assert len(buttons(home)) == 4
-    assert 'c:wholesale' in callbacks(home)
+    assert 'c:help' in callbacks(home)
+    assert 'c:wholesale' not in callbacks(home)
     assert '$' not in home['text']
     await env.callback(CLIENT, 'c:catalog')
     assert 'c:category:other' in callbacks(last(env, CLIENT))
@@ -205,7 +207,8 @@ async def test_customer_home_opens_categories_then_service_without_geography(env
     await env.callback(CLIENT, 'c:service:claude')
     geography = callbacks(last(env, CLIENT))
     assert 'c:order:claude:standard' in geography
-    assert 'Гео уточняйте у оператора' in last(env, CLIENT)['text']
+    assert 'для вашей страны' in last(env, CLIENT)['text']
+    assert 'оператор' in last(env, CLIENT)['text']
     assert env.store.for_user(CLIENT) is None
 
 
@@ -251,6 +254,6 @@ async def test_startup_restores_command_menu_for_persisted_client_mode(env):
     scoped = [params for method, params in env.request.calls
               if method == 'setMyCommands' and params.get('scope', {}).get('chat_id') == ADMIN]
     commands = {item['command'] for item in scoped[-1]['commands']}
-    assert commands == {'start', 'status', 'profile', 'help', 'admin'}
+    assert commands == {'start', 'services', 'status', 'profile', 'help', 'admin'}
     assert 'clients' not in commands
     assert env.store.operator_mode(ADMIN) == 'client'

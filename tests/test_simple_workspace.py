@@ -17,14 +17,15 @@ async def payment(env):
 
 async def test_customer_can_write_directly_and_payment_is_readable_without_opening_menus(env):
     await env.message(CLIENT, "/start")
-    assert {"c:catalog", "c:profile", "c:rules", "c:wholesale"} <= set(callbacks(last(env, CLIENT)))
+    assert {"c:catalog", "c:profile", "c:rules", "c:help"} <= set(callbacks(last(env, CLIENT)))
+    assert "c:wholesale" not in callbacks(last(env, CLIENT))
     ticket = await order(env)
     data = callbacks(last(env, CLIENT))
     assert f"c:cancel:{ticket.id}:{ticket.version}" in data
     assert not any(v.startswith(("c:write:", "c:proof_prompt:", "c:send_draft:")) for v in data)
     await env.callback(ADMIN, f"a:request_payment:{ticket.id}:{ticket.version}")
     card = last(env, CLIENT)
-    assert "Оператор принял сделку" in card["text"]
+    assert "Оператор принял заказ" in card["text"]
     assert "Дождитесь реквизитов" in card["text"]
     assert "$45" in card["text"] and "DEMO-" not in card["text"]
     assert f"c:cancel:{ticket.id}:{env.store.ticket(ticket.id).version}" in callbacks(card)

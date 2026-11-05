@@ -72,7 +72,7 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
     assert current.status == "new"  # Opening a new order does not start unpaid work.
     await press(env, ADMIN, f"a:request_payment:{ticket.id}:{current.version}")
     assert env.store.ticket(ticket.id).payment_stage == "awaiting_payment"
-    assert "Оператор принял сделку" in last(env, CLIENT)["text"]
+    assert "Оператор принял заказ" in last(env, CLIENT)["text"]
     assert "Дождитесь реквизитов" in last(env, CLIENT)["text"]
 
     await env.proof(CLIENT, "Тестовое подтверждение: https://example.org/mock-proof/123")
@@ -127,7 +127,7 @@ async def test_every_retired_network_button_returns_to_current_order_without_net
     before = env.store.ticket(ticket.id)
     for network in catalog.NETWORKS:
         await env.callback(CLIENT, f"c:network:{ticket.id}:{network.code}")
-        assert len(callbacks(last(env, CLIENT))) == 2
+        assert len(callbacks(last(env, CLIENT))) == 4
         assert not any(":network" in value for value in callbacks(last(env, CLIENT)))
         assert env.store.ticket(ticket.id) == before
     assert not any(method in {"sendInvoice", "createInvoiceLink"} for method, _ in env.request.calls)

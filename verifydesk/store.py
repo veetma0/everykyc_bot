@@ -80,6 +80,8 @@ def ticket_status(ticket: Ticket) -> str:
         }[ticket.status]
     if ticket.status == "new":
         if ticket.payment_stage == "awaiting_payment":
+            if ticket.has_payment_proof:
+                return "🧾 Нужен другой чек"
             return "💳 Ожидает оплаты"
         if ticket.payment_stage == "review":
             return "🔎 Проверяем оплату"

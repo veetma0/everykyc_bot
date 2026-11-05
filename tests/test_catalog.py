@@ -35,7 +35,8 @@ def test_complete_owner_price_list_and_telegram_limits():
     assert catalog.offer("eldorado", "standard").price_from
     assert not catalog.offer("localbitcoins", "standard").available
     cards = [screens.catalog_card(), ui.home("Эврикус", None)]
-    cards += [screens.category_card(code) for code in catalog.CATEGORIES]
+    cards += [screens.category_card(code, page) for code in catalog.CATEGORIES
+              for page in range((len(screens.category_offers(code)) + 7) // 8)]
     cards += [screens.offer_card(o) for o in catalog.OFFERS.values()]
     cards += [rules.card(i) for i in range(len(rules.PAGES))]
     for text, keyboard in cards:
@@ -46,15 +47,129 @@ def test_complete_owner_price_list_and_telegram_limits():
 
 @pytest.mark.parametrize("category", catalog.CATEGORIES)
 async def test_each_category_exposes_services_and_current_prices(env, category):
-    await env.callback(CLIENT, f"c:category:{category}")
-    card = last(env, CLIENT)
-    assert catalog.CATEGORIES[category] in card["text"]
-    assert "Гео уточняйте у оператора" in card["text"]
-    for selected in catalog.OFFERS.values():
-        if selected.category == category:
+    offers = screens.category_offers(category)
+    seen = []
+    for page in range((len(offers) + 7) // 8):
+        await env.callback(CLIENT, f"c:category:{category}:{page}")
+        card = last(env, CLIENT)
+        assert catalog.CATEGORIES[category] in card["text"]
+        assert "Доступность для вашей страны уточнит оператор" in card["text"]
+        service_rows = [row for row in card["reply_markup"]["inline_keyboard"]
+                        if row[0].get("callback_data", "").startswith("c:service:")]
+        assert all(1 <= len(row) <= 2 for row in service_rows)
+        assert sum(map(len, service_rows)) <= 8
+        for selected in offers[page * 8:(page + 1) * 8]:
             assert f"c:service:{selected.service}" in callbacks(card)
             assert selected.title not in card["text"]
-            assert any(catalog.offer_price(selected) in b["text"] for row in card["reply_markup"]["inline_keyboard"] for b in row if b.get("callback_data") == f"c:service:{selected.service}")
+            button = next(b for row in service_rows for b in row
+                          if b["callback_data"] == f"c:service:{selected.service}")
+            assert (catalog.offer_price(selected) if selected.available else "⛔") in button["text"]
+            assert ui.text_units(button["text"]) <= 24
+            seen.append(selected.service)
+        if page:
+            assert f"c:category:{category}:{page - 1}" in callbacks(card)
+        if (page + 1) * 8 < len(offers):
+            assert f"c:category:{category}:{page + 1}" in callbacks(card)
+    assert seen == [offer.service for offer in offers]
+
+
+def test_catalog_has_two_column_sections_and_no_wholesale_entrypoints():
+    text, keyboard = screens.catalog_card()
+    section_rows = [row for row in keyboard.inline_keyboard
+                    if str(row[0].callback_data).startswith("c:category:")]
+    assert len(section_rows) == 3
+    assert all(len(row) == 2 for row in section_rows)
+    assert {button.callback_data for row in section_rows for button in row} == {
+        f"c:category:{category}" for category in catalog.CATEGORIES
+    }
+    assert "опт" not in text.lower()
+    assert all(button.callback_data != "c:wholesale" for row in keyboard.inline_keyboard for button in row)
+
+
+@pytest.mark.parametrize("category", catalog.CATEGORIES)
+def test_category_out_of_range_pages_return_valid_first_or_last_page(category):
+    offers = screens.category_offers(category)
+    assert screens.category_card(category, -10) == screens.category_card(category, 0)
+    assert screens.category_card(category, 10000) == screens.category_card(category, (len(offers) - 1) // 8)
+
+
+@pytest.mark.parametrize("selected", catalog.OFFERS.values(), ids=lambda selected: selected.service)
+async def test_offer_back_button_returns_to_page_containing_the_offer(env, selected):
+    await env.callback(CLIENT, f"c:service:{selected.service}")
+    card = last(env, CLIENT)
+    back = next(data for data in callbacks(card) if data.startswith("c:category:"))
+    await env.callback(CLIENT, back)
+    assert f"c:service:{selected.service}" in callbacks(last(env, CLIENT))
+
+
+async def test_legacy_category_button_opens_first_page_and_preview_keeps_paging(env):
+    await env.callback(CLIENT, "c:category:exchanges")
+    first = last(env, CLIENT)
+    assert "c:service:bybit" in callbacks(first)
+    assert "c:service:paxful" not in callbacks(first)
+    assert "c:category:exchanges:1" in callbacks(first)
+    _, keyboard = screens.category_card("exchanges", 1)
+    preview = screens.preview_markup(keyboard)
+    assert all(str(button.callback_data).startswith("p:")
+               for row in preview.inline_keyboard for button in row)
+    assert "p:category:exchanges:0" in [button.callback_data
+                                      for row in preview.inline_keyboard for button in row]
+
+
+def test_legacy_only_customer_history_is_still_reachable_without_exposing_private_notes(store):
+    store.remember_user(CLIENT, CLIENT, "Клиент", "customer")
+    store.set_note(CLIENT, "Приватная заметка оператора", ADMIN)
+    discussion, _ = store.create_ticket(CLIENT, kind="wholesale")
+    store.set_status(discussion.id, discussion.version, "resolved", ADMIN)
+    profile = store.profile(CLIENT)
+    assert profile.total_tickets == 0
+    text, keyboard = screens.profile_card(profile, None, "UTC", has_history=True)
+    data = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    assert "c:orders:0" in data
+    assert "c:wholesale" not in data
+    assert "Приватная заметка" not in text
+
+
+def test_help_keeps_rules_privacy_and_order_instructions_available():
+    text, keyboard = screens.help_card()
+    data = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    assert {"c:guide:general", "c:rules", "c:privacy", "c:catalog", "c:home"} == set(data)
+    assert data[0] == "c:catalog"
+    assert ui.text_units(text) < 700
+
+
+def test_help_prioritizes_existing_order_without_creating_a_second_one(store):
+    store.remember_user(CLIENT, CLIENT, "Клиент", None)
+    ticket, _ = store.create_ticket(CLIENT)
+    _, keyboard = screens.help_card(ticket)
+    assert keyboard.inline_keyboard[0][0].callback_data == "c:current"
+
+
+def test_rules_intro_and_consent_controls_leave_full_rules_intact():
+    for page in range(len(rules.PAGES)):
+        text, keyboard = rules.card(page)
+        data = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+        assert rules.PAGES[page] in text
+        assert (f"c:agree:{rules.VERSION}" in data) == (page == len(rules.PAGES) - 1)
+        assert ui.text_units(text) <= 4096
+    text, keyboard = rules.card(0)
+    assert f"прочитайте все {len(rules.PAGES)} страницы" in text
+    assert keyboard.inline_keyboard[0][0].callback_data == f"c:rules:{rules.VERSION}:1"
+
+
+async def test_paid_order_instruction_explains_verification_without_restarting_checkout(env):
+    from .payment_helpers import legacy_ticket
+
+    ticket = legacy_ticket(env.store, await order(env, service="bybit"))
+    ticket = env.store.set_status(ticket.id, ticket.version, "in_progress", ADMIN)
+    await env.callback(CLIENT, f"c:guide:{ticket.service_code}")
+    card = last(env, CLIENT)
+    assert "Проверку проходите самостоятельно" in card["text"]
+    assert "в своём аккаунте" in card["text"]
+    assert "оформите заказ" not in card["text"]
+    assert "пришлите сюда чек" not in card["text"]
+    assert callbacks(card) == ["c:current"]
+    assert "оформите заказ" in screens.guide("general")
 
 
 @pytest.mark.parametrize("service", [o.service for o in catalog.OFFERS.values() if o.available])
@@ -64,7 +179,7 @@ async def test_every_active_service_creates_correctly_priced_order_and_notifies_
     ticket = await order(env, service=service)
     selected = catalog.offer(service, "standard")
     assert (ticket.service_code, ticket.price_usd) == (service, selected.price_usd)
-    assert "Оператор примет сделку и отправит вам реквизиты" in last(env, CLIENT)["text"]
+    assert "Оператор уточнит вашу страну и условия" in last(env, CLIENT)["text"]
     assert selected.title in last(env, ADMIN)["text"]
     await env.callback(CLIENT, f"c:order:{service}:standard")
     assert env.store.profile(CLIENT).total_tickets == 1
@@ -169,7 +284,7 @@ async def test_consent_survives_restart_and_new_rules_need_new_agreement(env, mo
 async def test_operator_admin_access_and_client_onboarding_modes(env):
     env.require_terms = True
     await env.message(ADMIN, "/admin")
-    assert "Заказы" in last(env, ADMIN)["text"]
+    assert "Кабинет оператора" in last(env, ADMIN)["text"]
     await env.message(ADMIN, "/client")
     assert "Правила оказания услуг" in last(env, ADMIN)["text"]
     assert env.store.operator_mode(ADMIN) == "client"

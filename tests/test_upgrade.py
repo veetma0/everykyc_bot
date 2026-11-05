@@ -48,7 +48,7 @@ async def test_claude_offer_shows_price_and_own_data_consent_before_one_click_or
     offer_screen = last(env, CLIENT)
     assert any(catalog.dollars(price) in b["text"] for b in buttons(offer_screen))
     assert "сами на свои данные" in offer_screen["text"]
-    assert "Документы — только в официальном сервисе" in offer_screen["text"]
+    assert "в официальном сервисе" in offer_screen["text"]
     assert "Оформляя заказ" in offer_screen["text"] and "подтверждаете" in offer_screen["text"]
     assert "аккаунт ваш" in offer_screen["text"] and "без списаний" in offer_screen["text"].lower()
     assert f"c:order:claude:{plan}" in callbacks(offer_screen)
@@ -57,7 +57,7 @@ async def test_claude_offer_shows_price_and_own_data_consent_before_one_click_or
     assert (ticket.service_code, ticket.plan_code, ticket.price_usd) == ("claude", plan, price)
     assert ticket.status == "new"
     assert env.store.db.execute("SELECT consent_at FROM tickets WHERE id=?", (ticket.id,)).fetchone()[0] > 0
-    assert "Сделка" in last(env, CLIENT)["text"]
+    assert "Заказ" in last(env, CLIENT)["text"]
     assert not last(env, CLIENT).get("reply_markup", {}).get("force_reply")
 
 
@@ -77,8 +77,8 @@ async def test_customer_card_never_discloses_operator_note(env):
     env.store.set_note(CLIENT, "Секретная заметка оператора", ADMIN)
     await env.callback(CLIENT, "c:profile")
     text = last(env, CLIENT)["text"]
-    assert "Мои заказы" in text and f"{CLIENT}" in text
-    assert "Claude" in text and "заказов" in text.lower()
+    assert "Мои заказы" in text and "Заказ №" in text
+    assert "Claude" in text and "Ожидает оператора" in text
     assert "Секретная заметка" not in text
     assert not any(value.startswith("a:") for value in callbacks(last(env, CLIENT)))
     await env.callback(ADMIN, f"a:client:{CLIENT}")
@@ -160,8 +160,8 @@ async def test_retired_payment_menu_returns_to_current_order_without_extra_choic
     ticket = await order(env)
     await env.callback(CLIENT, f"c:pay:{ticket.id}")
     screen = last(env, CLIENT)
-    assert "Сделка" in screen["text"]
-    assert len(buttons(screen)) == 2
+    assert "Заказ" in screen["text"]
+    assert len(buttons(screen)) == 4
     assert not any(":network" in value for value in callbacks(screen))
     assert not any(method in {"sendInvoice", "createInvoiceLink"} for method, _ in env.request.calls)
 
@@ -171,7 +171,7 @@ async def test_retired_network_pages_cannot_restore_old_button_menus(env):
     for group in catalog.NETWORK_GROUPS:
         for offset in (0, 8, 16):
             await env.callback(CLIENT, f"c:networks:{ticket.id}:{group}:{offset}")
-            assert len(buttons(last(env, CLIENT))) == 2
+            assert len(buttons(last(env, CLIENT))) == 4
             assert not any(":network" in value for value in callbacks(last(env, CLIENT)))
     assert env.store.ticket(ticket.id).demo_network is None
 
@@ -183,7 +183,7 @@ async def test_retired_network_selection_is_read_only(env, network):
     ticket = env.store.ticket(initial.id)
     assert ticket == initial
     assert ticket.demo_network is None
-    assert len(callbacks(last(env, CLIENT))) == 2
+    assert len(callbacks(last(env, CLIENT))) == 4
 
 
 async def test_other_customer_cannot_view_or_choose_mock_network_for_ticket(env):
@@ -281,10 +281,10 @@ async def test_preview_ticket_history_and_payment_buttons_remain_preview_scoped(
     assert env.store.ticket(ticket.id).demo_network is None
 
 
-async def test_help_only_offers_claude_and_keeps_official_owner_verification_guidance(env):
+async def test_help_explains_ordering_and_keeps_official_owner_verification_guidance(env):
     await env.message(CLIENT, "/help")
     screen = last(env, CLIENT)
-    assert callbacks(screen) == ["c:current"]
+    assert {"c:guide:general", "c:rules", "c:privacy", "c:catalog", "c:home"} == set(callbacks(screen))
     assert all(service not in screen["text"].lower() for service in ("alipay", "chatgpt", "gemini"))
     assert not any(service in value for value in callbacks(screen) for service in ("alipay", "chatgpt", "gemini"))
     await env.callback(CLIENT, "c:guide:claude")

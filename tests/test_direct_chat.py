@@ -33,9 +33,10 @@ def media_calls(env, uid):
 
 
 async def wholesale(env, uid=CLIENT):
-    await env.callback(uid, "c:wholesale")
-    ticket = env.store.for_user(uid, active_only=True, kind="wholesale")
-    assert ticket is not None
+    # Existing discussions survive the removal of the new-wholesale entry point.
+    env.store.remember_user(uid, uid, f"Клиент {uid}", f"user{uid}")
+    ticket, _ = env.store.create_ticket(uid, kind="wholesale")
+    await env.callback(uid, f"c:chat:{ticket.id}")
     return ticket
 
 

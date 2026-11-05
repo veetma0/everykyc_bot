@@ -309,7 +309,7 @@ async def test_emoji_history_fits_telegram_limit_and_opens_full_message(env):
 
 async def test_admin_start_opens_operator_cabinet_and_sets_private_commands(env):
     await env.message(ADMIN, "/start")
-    assert "Заказы" in texts(env, ADMIN)[-1]
+    assert "Кабинет оператора" in texts(env, ADMIN)[-1]
     command_calls = [params for method, params in env.request.calls if method == "setMyCommands"]
     assert command_calls[-1]["scope"]["chat_id"] == ADMIN
     assert command_calls[-1]["commands"][0]["command"] == "admin"
