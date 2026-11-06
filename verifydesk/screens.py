@@ -11,7 +11,7 @@ from .store import OPEN_STATUSES, ticket_status
 CATALOG_PAGE_SIZE = 8
 CATEGORY_BUTTON_TITLES = {
     "exchanges": "Биржи", "marketplaces": "Маркетплейсы", "wallets": "Кошельки",
-    "telegram": "Telegram", "casinos": "Казино", "other": "Другие сервисы",
+    "telegram": "Telegram", "casinos": "Казино", "other": "AI и сервисы",
 }
 
 
@@ -39,12 +39,12 @@ def _service_button(offer):
 def catalog_card():
     return (
         "<b>Каталог услуг</b>\n\n"
-        "В каком сервисе нужна помощь с аккаунтом?\n"
-        "Выберите раздел — внутри услуги и цены.",
+        "Выберите категорию.\n"
+        "Цена сопровождения — на кнопке сервиса.",
         ui.Keyboard(
             _two_columns([ui.action(CATEGORY_BUTTON_TITLES[code], f"c:category:{code}")
                           for code in catalog.CATEGORIES])
-            + [[ui.action("📦 Мои заказы", "c:profile"), ui.action("Главная", "c:home")]]
+            + [[ui.action("Мои заказы", "c:profile"), ui.action("‹ Главная", "c:home")]]
         ),
     )
 
@@ -57,15 +57,15 @@ def category_card(category, page=0):
     start = page * CATALOG_PAGE_SIZE
     lines = [f"<b>{title}</b>"]
     if pages > 1:
-        lines.append(f"Страница {page + 1} из {pages}")
-    lines += ["", "Выберите сервис, чтобы узнать условия.",
+        lines.append(f"{page + 1} / {pages} · {len(offers)} сервисов")
+    lines += ["", "Выберите сервис — откроется карточка с условиями.",
               "Доступность для вашей страны уточнит оператор."]
     rows = _two_columns([_service_button(offer) for offer in offers[start:start + CATALOG_PAGE_SIZE]])
     navigation = []
     if page:
-        navigation.append(ui.action("‹ Назад", f"c:category:{category}:{page - 1}"))
+        navigation.append(ui.action("‹ Предыдущие", f"c:category:{category}:{page - 1}"))
     if page + 1 < pages:
-        navigation.append(ui.action("Далее ›", f"c:category:{category}:{page + 1}"))
+        navigation.append(ui.action("Следующие ›", f"c:category:{category}:{page + 1}"))
     if navigation:
         rows.append(navigation)
     rows.append([ui.action("‹ Разделы", "c:catalog"), ui.action("Главная", "c:home")])
@@ -77,24 +77,25 @@ def service_card(service):
 
 
 def offer_card(offer):
-    text = f"<b>{escape(offer.title)}</b>\n\n"
+    text = f"<b>{escape(offer.title)}</b>\n"
     rows = []
     if not offer.available:
-        text += "⛔ Сервис прекратил работу. Новые заказы на верификацию не принимаются."
+        text += "\n⛔ Сервис прекратил работу. Новые заказы на верификацию не принимаются."
     else:
+        text += f"<b>{catalog.offer_price(offer)}</b> · сопровождение KYC\n\n"
         text += f"{escape(offer.detail)}\n\n"
-        text += "Доступность для вашей страны и условия уточнит оператор до оплаты.\n\n"
+        text += "Доступность для вашей страны и условия уточнит оператор до оплаты.\n"
         if offer.price_from:
-            text += "Стоимость зависит от задачи. Точную цену назовёт оператор.\n\n"
+            text += "Точная стоимость зависит от задачи.\n"
         if offer.service == "claude":
-            text += "Подписка Claude оплачивается отдельно.\n\n"
+            text += "Подписка Claude оплачивается отдельно.\n"
         text += (
-            "Проверку вы проходите сами на свои данные в официальном сервисе. "
+            "\nПроверку вы проходите сами на свои данные в официальном сервисе. "
             "Оформляя заказ, подтверждаете, что аккаунт ваш.\n\n"
-            "Заказ без списаний. Оператор ответит в этом чате."
+            "<b>Создание заказа без списаний.</b> Затем напишите вопрос в этот чат."
         )
         rows.append([ui.action(
-            f"Оформить заказ · {catalog.offer_price(offer)}", f"c:order:{offer.service}:{offer.plan}",
+            f"Оформить заказ · {catalog.offer_price(offer)}", f"c:order:{offer.service}:{offer.plan}", "primary",
         )])
     rows.append([ui.action("‹ К списку", f"c:category:{offer.category}:{category_page(offer)}"),
                  ui.action("Главная", "c:home")])
@@ -127,28 +128,27 @@ def guide(service="general"):
 def unavailable_service():
     return (
         "<b>⛔ Услуга недоступна</b>\n\nВыберите другое направление в каталоге. История прежних заказов сохранена.",
-        ui.Keyboard([[ui.action("✨ Каталог услуг", "c:catalog")], [ui.action("📦 Мои заказы", "c:profile")]]),
+        ui.Keyboard([[ui.action("Каталог услуг", "c:catalog", "primary")],
+                     [ui.action("Мои заказы", "c:profile")]]),
     )
 
 
 def help_card(current=None):
     rows = []
     if current and current.status in OPEN_STATUSES:
-        rows.append([ui.action("Открыть заказ", "c:current")])
+        rows.append([ui.action("Написать по заказу", "c:current", "primary")])
     else:
-        rows.append([ui.action("Каталог услуг", "c:catalog")])
+        rows.append([ui.action("Выбрать услугу", "c:catalog", "primary")])
     rows += [[ui.action("Правила", "c:rules"), ui.action("Мои данные", "c:privacy")],
              [ui.action("Инструкция", "c:guide:general"), ui.action("Главная", "c:home")]]
     return (
         "<b>Помощь</b>\n\n"
-        "<b>Что делать после заказа?</b>\n"
-        "Напишите вопрос в этот чат. Оператор ответит здесь.\n\n"
-        "<b>Когда платить?</b>\n"
-        "После согласования условий и получения реквизитов. Затем пришлите сюда чек.\n\n"
-        "<b>Подойдёт ли моя страна?</b>\n"
-        "Уточните доступность у оператора до оплаты.\n\n"
-        "<b>Кто проходит проверку?</b>\n"
-        "Вы сами, на свои данные. Документы — только в официальном сервисе.",
+        "<b>Связь с оператором</b>\n"
+        "Откройте заказ и пишите прямо в этот чат. Ответ придёт сюда.\n\n"
+        "<b>Условия и оплата</b>\n"
+        "Сначала оператор уточнит страну и задачу. После согласования отправит реквизиты.\n\n"
+        "<b>Верификация</b>\n"
+        "Проверку проходите вы. Документы, селфи и коды вводите только в официальном сервисе.",
         ui.Keyboard(rows),
     )
 
@@ -165,13 +165,13 @@ def profile_card(profile, current, timezone, admin=False, has_history=None):
                 f" · {catalog.dollars(current.price_usd)}\n"
                 f"Заказ №{current.id:04d}\n{ticket_status(current)}"
             )
-            rows.append([ui.action("Открыть заказ", f"c:view:{current.id}")])
+            rows.append([ui.action("Продолжить заказ", f"c:view:{current.id}", "primary")])
         else:
             text += (
-                "\n\nАктивных заказов сейчас нет.\nПредыдущие обращения сохранены в истории."
-                if has_history else "\n\nЗдесь появятся ваши заказы.\nВыберите услугу, чтобы начать."
+                "\n\nАктивных заказов сейчас нет.\nПереписка и детали — в истории заказов."
+                if has_history else "\n\nПока нет заказов.\nВыберите сервис — здесь появятся статус и переписка."
             )
-            rows.append([ui.action("Выбрать услугу", "c:catalog")])
+            rows.append([ui.action("Выбрать услугу", "c:catalog", "primary")])
         if has_history:
             rows.append([ui.action("История заказов", "c:orders:0")])
         rows.append([ui.action("Помощь", "c:help"), ui.action("Главная", "c:home")])

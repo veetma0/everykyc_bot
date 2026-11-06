@@ -1028,7 +1028,8 @@ class Desk:
                         [
                             [
                                 ui.action(
-                                    label, f"a:confirm:{ticket.id}:{version}:{status}", "success"
+                                    label, f"a:confirm:{ticket.id}:{version}:{status}",
+                                    "danger" if status == "cancelled" else "success"
                                 )
                             ],
                             [ui.action("Назад", f"a:view:{ticket.id}")],

@@ -1,0 +1,13 @@
+# EVERYKYC banner
+
+Created on 2026-11-06 with the built-in `image_gen` tool. The source artwork is `everykyc-banner.png`; `everykyc-welcome-640x360.png` is its resized Telegram description-picture export. No identity or customer data was used. Binance appears as requested visual context only; it has not been added to the service catalog. Publication status is tracked in the project README and redesign notes.
+
+## Exact prompt
+
+Use case: ads-marketing.
+Asset type: finished premium Telegram bot welcome/profile banner, landscape 16:9, ideally 1280x720, must stay readable at 640x360.
+Primary request: striking contemporary visual identity for EVERYKYC, an independent service helping users understand verification of their own accounts. Include the recognizable Claude icon, BYBIT wordmark and Binance symbol, plus a real-looking anonymous human whose face cannot be seen.
+Scene: art-directed editorial still life on deep graphite black, generous negative space, subtle fine film grain. On the right, a human seen from behind in a minimal matte black jacket, head turned fully away, no visible face or facial features, cropped shoulders and head. A delicate icy aqua rectangular identity-scanning frame sits around the silhouette without revealing an identity; beautiful restrained edge light, natural soft photographic textures, not hacker imagery.
+Left side: oversized sophisticated ivory sans serif wordmark exactly "EVERYKYC"; below it a clear smaller Russian line exactly "Помощь с верификацией". Clean typography, excellent spacing, deliberate high contrast. Below the line, three small refined separate platform tiles laid out in one calm horizontal row: Claude’s recognizable warm terracotta asterisk icon with small word Claude; BYBIT’s clean wordmark (ivory with yellow accent); Binance’s recognizable yellow diamond symbol with small word Binance. These are service ecosystem references, not partner badges or claims of endorsement. Keep logos crisp and legible.
+Composition: typography on left 57%, silhouette on right 43%, with safe margins at least 7%, visually balanced, luxury technology editorial rather than neon crypto advertisement. Palette graphite, warm ivory, restrained aqua and the authentic platform accent colors. Strong visual simplicity that works inside Telegram.
+Constraints: exactly these textual elements only, no extra slogans, no official/partner/guaranteed/verified badges, no passport, no document contents, no personal data, no visible face, no hood, no glowing eyes, no coins, no charts, no padlock, no cybersecurity cliches, no excessive gradients, no tiny decorative UI, no watermark. Return only the finished banner artwork.

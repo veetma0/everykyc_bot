@@ -19,7 +19,7 @@ async def request_payment(env):
 
 async def test_visible_order_journey_requires_payment_review_before_work(env):
     await env.message(CLIENT, "/start")
-    assert len(buttons(last(env, CLIENT))) == 4
+    assert len(buttons(last(env, CLIENT))) <= 8
     for data in ("c:catalog", "c:category:other", "c:service:claude", "c:order:claude:standard"):
         assert data in callbacks(last(env, CLIENT))
         await env.callback(CLIENT, data)

@@ -23,8 +23,10 @@ async def test_home_groups_primary_action_navigation_and_rules(env):
     card = last(env, CLIENT)
     rows = card["reply_markup"]["inline_keyboard"]
     assert [[button["callback_data"] for button in row] for row in rows] == [
-        ["c:catalog"], ["c:profile", "c:help"], ["c:rules"],
+        ["c:catalog"], ["c:service:claude", "c:service:bybit"],
+        ["c:service:alipay", "c:guide:general"], ["c:profile", "c:help"], ["c:rules"],
     ]
+    assert rows[0][0]["style"] == "primary"
     assert "Обсудить опт" not in card["text"]
     assert ticket_count(env) == 0
     assert not sent(env, ADMIN)
@@ -37,6 +39,24 @@ async def test_active_order_is_reachable_from_home_without_new_order(env):
     await env.callback(CLIENT, callbacks(last(env, CLIENT))[0])
     assert env.store.customer_focus(CLIENT).id == ticket.id
     assert ticket_count(env) == 1
+
+
+@pytest.mark.parametrize("service", ["claude", "bybit", "alipay"])
+async def test_home_shortcut_opens_priced_offer_without_creating_order(env, service):
+    from verifydesk import catalog
+
+    await env.message(CLIENT, "/start")
+    selected = catalog.offer(service, "standard")
+    shortcut = next(button for row in last(env, CLIENT)["reply_markup"]["inline_keyboard"] for button in row
+                    if button["callback_data"] == f"c:service:{service}")
+    assert catalog.offer_price(selected) in shortcut["text"]
+    await env.callback(CLIENT, shortcut["callback_data"])
+    card = last(env, CLIENT)
+    assert selected.title in card["text"]
+    assert catalog.offer_price(selected) in card["text"]
+    assert f"c:order:{service}:standard" in callbacks(card)
+    assert ticket_count(env) == 0
+    assert not sent(env, ADMIN)
 
 
 @pytest.mark.parametrize("entry", ["c:home", "c:catalog", "c:profile", "c:help"])

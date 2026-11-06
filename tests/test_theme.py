@@ -33,7 +33,7 @@ async def test_known_custom_emoji_rejection_falls_back_once(tmp_path):
         )
     )
     keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("Дальше", callback_data="c:catalog", icon_custom_emoji_id="123456")]]
+        [[InlineKeyboardButton("Дальше", callback_data="c:catalog", icon_custom_emoji_id="123456", style="primary")]]
     )
     result, state = await deliver(bot, 101, '<tg-emoji emoji-id="123456">⭐</tg-emoji> Текст', keyboard)
     assert state == "delivered" and result.message_id == 1
@@ -41,6 +41,7 @@ async def test_known_custom_emoji_rejection_falls_back_once(tmp_path):
     second = bot.send_message.await_args_list[-1].kwargs
     assert "tg-emoji" not in second["text"]
     assert second["reply_markup"].inline_keyboard[0][0].icon_custom_emoji_id is None
+    assert second["reply_markup"].inline_keyboard[0][0].style == "primary"
     assert not theme.enabled()
 
 
@@ -98,7 +99,7 @@ async def test_only_returned_pack_button_icons_are_enabled_and_survive_restart(t
     theme.configure(tmp_path)
     assert theme.service_icon("bybit") == bybit
     assert ui.action("Услуги", "c:catalog", "primary").icon_custom_emoji_id is None
-    assert ui.action("Услуги", "c:catalog", "primary").style is None
+    assert ui.action("Услуги", "c:catalog", "primary").style == "primary"
 
 
 async def test_unrecognized_pack_artwork_is_never_guessed(tmp_path):

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from verifydesk import catalog, screens, ui
+from verifydesk import catalog, screens
 from verifydesk.store import Store
 
 from .conftest import ADMIN, CLIENT, OTHER
@@ -196,7 +196,8 @@ async def test_customer_home_opens_categories_then_service_without_geography(env
     home = last(env, CLIENT)
     assert 'c:catalog' in callbacks(home)
     assert not any(value.startswith('c:offer:claude:') for value in callbacks(home))
-    assert len(buttons(home)) == 4
+    assert len(buttons(home)) <= 8
+    assert all(len(row) <= 2 for row in home['reply_markup']['inline_keyboard'])
     assert 'c:help' in callbacks(home)
     assert 'c:wholesale' not in callbacks(home)
     assert '$' not in home['text']
@@ -212,7 +213,7 @@ async def test_customer_home_opens_categories_then_service_without_geography(env
     assert env.store.for_user(CLIENT) is None
 
 
-async def test_rendered_action_buttons_are_neutral_in_both_roles(env):
+async def test_rendered_buttons_use_native_emphasis_in_both_roles(env):
     await env.message(ADMIN, '/start')
     await env.message(ADMIN, '/client')
     await env.callback(ADMIN, 'c:service:claude')
@@ -225,13 +226,19 @@ async def test_rendered_action_buttons_are_neutral_in_both_roles(env):
     await env.message(ADMIN, '/admin')
     await env.callback(ADMIN, f'a:status:{ticket.id}')
     for params in sent(env):
+        assert sum(button.get('style') == 'primary' for button in buttons(params)) <= 1
         for button in buttons(params):
-            assert button.get('style') is None
+            assert button.get('style') in {None, 'primary', 'success', 'danger'}
+            if button.get('style') == 'danger':
+                assert button['callback_data'].startswith('c:close:')
             assert button.get('icon_custom_emoji_id') is None
     for offer in catalog.OFFERS.values():
         _, keyboard = screens.offer_card(offer)
-        assert all(button.style is None for row in keyboard.inline_keyboard for button in row)
-    assert ui.action('Удалить', 'c:home', 'danger').style is None
+        colored = [button for row in keyboard.inline_keyboard for button in row if button.style]
+        assert len(colored) == int(offer.available)
+        if colored:
+            assert colored[0].style == 'primary'
+            assert colored[0].callback_data == f'c:order:{offer.service}:{offer.plan}'
 
 
 async def test_preview_inside_client_mode_cannot_create_request_or_change_role(env):

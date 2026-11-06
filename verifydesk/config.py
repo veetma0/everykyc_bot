@@ -6,6 +6,8 @@ import re
 
 from dotenv import load_dotenv
 
+from .catalog import BRAND_NAME
+
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 
@@ -19,7 +21,7 @@ class Config:
     token: str
     admin_ids: tuple[int, ...]
     data_dir: Path
-    title: str = "Эврикус"
+    title: str = BRAND_NAME
     timezone: str = "Asia/Amman"
 
     @classmethod
@@ -47,7 +49,10 @@ class Config:
         data_dir = Path(os.environ.get("DATA_DIR", "./data"))
         if not data_dir.is_absolute():
             data_dir = env_file.parent / data_dir
-        title = os.environ.get("BOT_TITLE", "Эврикус").strip()
+        title = os.environ.get("BOT_TITLE", BRAND_NAME).strip()
+        # Existing deployments used this retired default as an explicit variable.
+        if title == "Эврикус":
+            title = BRAND_NAME
         if not 1 <= len(title) <= 64:
             raise ConfigurationError("Название BOT_TITLE должно содержать от 1 до 64 символов.")
         return cls(token, admins, data_dir.resolve(), title, timezone)

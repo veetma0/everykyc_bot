@@ -94,4 +94,5 @@ def test_native_buttons_have_safe_lengths_and_no_private_contact_link(store):
             for button in row:
                 assert button.url is None
                 assert len(button.callback_data.encode()) <= 64
-    assert all(button.style is None for _, keyboard in cards for row in keyboard.inline_keyboard for button in row)
+    for _, keyboard in cards:
+        assert sum(button.style == "primary" for row in keyboard.inline_keyboard for button in row) <= 1

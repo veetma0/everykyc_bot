@@ -35,7 +35,8 @@ def test_every_operator_card_has_history_details_and_exit(ticket, status, stage)
     assert [button.callback_data for button in keyboard.inline_keyboard[-1]] == [
         f"a:next:{ticket.id}", "a:home",
     ]
-    assert all(button.style is None for row in keyboard.inline_keyboard for button in row)
+    assert sum(button.style == "primary" for row in keyboard.inline_keyboard for button in row) <= 1
+    assert all(button.style is None for row in keyboard.inline_keyboard[-2:] for button in row)
 
 
 def test_payment_decisions_have_separate_full_width_rows(ticket):

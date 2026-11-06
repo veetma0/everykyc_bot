@@ -36,10 +36,10 @@ PRIVACY = (
 
 
 def action(text: str, data: str, style: str | None = None):
-    # All actions use Telegram's neutral appearance, including old styled call sites.
+    # Telegram owns the palette: emphasize only the next action on each screen.
     parts = data.split(":")
     icon = theme.service_icon(parts[2]) if len(parts) == 3 and parts[1] == "service" else None
-    return Button(text, callback_data=data, icon_custom_emoji_id=icon)
+    return Button(text, callback_data=data, icon_custom_emoji_id=icon, style=style)
 
 
 def text_units(text: str):
@@ -62,23 +62,35 @@ def conversation_keyboard(tickets, selected_id=None):
 
 
 def home(title: str, ticket: Ticket | None):
+    def shortcut(code, label):
+        return action(f"{label} · {catalog.offer_price(catalog.offer(code, 'standard'))}", f"c:service:{code}")
+
     rows = [
-        [action("Каталог услуг", "c:catalog")],
+        [action("Открыть каталог", "c:catalog", "primary")],
+        [shortcut("claude", "Claude"), shortcut("bybit", "Bybit")],
+        [shortcut("alipay", "Alipay"), action("Как это работает", "c:guide:general")],
         [action("Мои заказы", "c:profile"), action("Помощь", "c:help")],
         [action("Правила сервиса", "c:rules")],
     ]
     text = (
         f"<b>{escape(title)}</b>\n"
-        "Помощь с верификацией вашего аккаунта.\n\n"
-        "Выберите сервис в каталоге — там есть цены и условия. "
-        "После оформления заказа оператор ответит в этом чате."
+        "KYC и верификация вашего аккаунта.\n\n"
+        "Выберите сервис → узнайте условия → получите помощь.\n"
+        "Заказ и ответы оператора останутся в этом чате."
     )
     if ticket and ticket.status in OPEN_STATUSES:
-        text += (
-            f"\n\n<b>Ваш заказ №{ticket.id:04d}</b>\n"
-            f"{escape(catalog.service_title(ticket.service_code, ticket.plan_code))} · {ticket_status(ticket)}"
+        text = (
+            f"<b>{escape(title)}</b>\n\n"
+            f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
+            f" · {catalog.dollars(ticket.price_usd)}\n"
+            f"Заказ №{ticket.id:04d} · {ticket_status(ticket)}\n\n"
+            "Откройте заказ, чтобы увидеть следующий шаг и написать оператору."
         )
-        rows.insert(0, [action("Продолжить заказ", f"c:chat:{ticket.id}")])
+        rows = [
+            [action("Продолжить заказ", f"c:chat:{ticket.id}", "primary")],
+            [action("Каталог услуг", "c:catalog"), action("Мои заказы", "c:profile")],
+            [action("Помощь", "c:help"), action("Правила", "c:rules")],
+        ]
     return text, Keyboard(rows)
 
 
@@ -89,7 +101,7 @@ def prepare():
         "Оператор поможет с шагами и ошибками.\n\n"
         "Оформляя заказ, вы подтверждаете, что аккаунт ваш. Затем напишите вопрос в этот чат.",
         Keyboard([
-            [action("🛍 Оформить заказ", "c:create")],
+            [action("Оформить заказ", "c:create", "primary")],
             [action("← Назад", "c:home")],
         ]),
     )
@@ -109,9 +121,9 @@ def customer_ticket(ticket: Ticket, timezone: str):
         return payment_request(ticket)
     hints = {
         "new": "Оператор уточнит вашу страну и условия, затем отправит реквизиты.\n"
-               "Пока опишите, с чем нужна помощь.",
+               "Напишите, с чем нужна помощь, прямо в этот чат.",
         "in_progress": "Ожидайте сообщения от оператора.\n"
-                       "Порядок самостоятельной проверки уточнит оператор.\n"
+                       "Он подскажет следующий шаг самостоятельной проверки.\n"
                        "🔒 Ссылку KYC, документы и коды входа сюда не отправляйте.",
         "waiting_user": "Оператор ждёт ваш ответ. Напишите его в этом чате.",
         "resolved": "Сопровождение завершено. Спасибо за обращение!",
@@ -121,18 +133,17 @@ def customer_ticket(ticket: Ticket, timezone: str):
     if ticket.status == "new" and ticket.payment_stage == "review":
         hint = "Подтверждение оплаты отправлено оператору. Ожидайте его ответа."
     text = (
-        f"<b>{conversation_title(ticket)}</b>\n"
-        f"{escape(catalog.service_title(ticket.service_code, ticket.plan_code))} · {catalog.dollars(ticket.price_usd)}\n\n"
+        f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
+        f" · {catalog.dollars(ticket.price_usd)}\n"
+        f"Заказ №{ticket.id:04d}\n\n"
         f"<b>{ticket_status(ticket)}</b>\n{hint}"
     )
     rows = []
     if ticket.status not in OPEN_STATUSES:
-        rows.append([action("Выбрать услугу", "c:catalog")])
+        rows.append([action("Выбрать услугу", "c:catalog", "primary")])
     else:
-        if ticket.payment_stage != "review":
-            text += "\n\nСообщения оператору отправляйте прямо в этот чат."
         if ticket.payment_stage == "confirmed":
-            rows.append([action("Инструкция", f"c:guide:{ticket.service_code}")])
+            rows.append([action("Следующие шаги", f"c:guide:{ticket.service_code}", "primary")])
     rows += customer_ticket_navigation(ticket)
     return text, Keyboard(rows)
 
@@ -152,8 +163,8 @@ def customer_details(ticket: Ticket, timezone: str):
 def payment_request(ticket: Ticket):
     if ticket.has_payment_proof:
         return (
-            f"<b>{conversation_title(ticket)}</b>\n"
-            f"{escape(catalog.service_title(ticket.service_code, ticket.plan_code))} · {catalog.dollars(ticket.price_usd)}\n\n"
+            f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
+            f" · {catalog.dollars(ticket.price_usd)}\nЗаказ №{ticket.id:04d}\n\n"
             "<b>🧾 Нужен другой чек</b>\n"
             "По предыдущему чеку оператор не смог подтвердить оплату.\n\n"
             "Пришлите новый скриншот, файл или ссылку на чек в этот чат. "
@@ -162,8 +173,8 @@ def payment_request(ticket: Ticket):
             Keyboard(customer_ticket_navigation(ticket)),
         )
     return (
-        f"<b>{conversation_title(ticket)}</b>\n"
-        f"{escape(catalog.service_title(ticket.service_code, ticket.plan_code))} · {catalog.dollars(ticket.price_usd)}\n\n"
+        f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
+        f" · {catalog.dollars(ticket.price_usd)}\nЗаказ №{ticket.id:04d}\n\n"
         "<b>💳 Ожидает оплаты</b>\n"
         "Оператор принял заказ. Дождитесь реквизитов в этом чате и согласуйте условия до оплаты.\n\n"
         "После оплаты пришлите сюда фото, файл или ссылку на чек. "
@@ -198,12 +209,12 @@ def admin_home(counts: dict[str, int], queue_count: int | None = None, stages=No
     waiting = counts["new"] + counts["in_progress"] if queue_count is None else queue_count
     return (
         "<b>Кабинет оператора</b>\n\n"
-        f"Требуют внимания: <b>{waiting}</b>\n"
+        f"К ответу: <b>{waiting}</b>\n"
         f"💳 Чеки на проверке: <b>{stages['review'] if stages else 0}</b>\n"
         f"🛠 В работе: <b>{counts['in_progress'] + counts['waiting_user']}</b>\n\n"
         "Сначала — чеки, затем заказы в работе и новые обращения.",
         Keyboard([
-            [action(f"▶️ Следующий · {waiting}", "a:next")],
+            [action(f"Следующее обращение · {waiting}", "a:next", "primary")],
             [action(f"Обращения · {active}", "a:list:active:0"), action("По номеру", "a:find")],
             [action("Ещё", "a:more")],
         ]),
@@ -247,14 +258,14 @@ def admin_ticket(ticket: Ticket, snippet: str | None = None, *, proof_ready=Fals
     rows = []
     if ticket.status in OPEN_STATUSES:
         if not wholesale and ticket.payment_stage == "not_requested":
-            rows.append([action("💳 Принять заказ", f"a:request_payment:{ticket.id}:{ticket.version}")])
+            rows.append([action("Принять заказ", f"a:request_payment:{ticket.id}:{ticket.version}", "primary")])
         elif not wholesale and ticket.payment_stage == "review":
             if proof_ready:
-                rows.append([action("✅ Оплата получена", f"a:confirm_payment:{ticket.id}:{ticket.version}")])
+                rows.append([action("Оплата получена", f"a:confirm_payment:{ticket.id}:{ticket.version}", "success")])
                 rows.append([action("Запросить другой чек", f"a:reject_payment:{ticket.id}:{ticket.version}")])
             else:
-                rows.append([action("🔎 Проверить чек", f"a:proofs:{ticket.id}")])
-        reply = [action("Ответить", f"a:reply:{ticket.id}")]
+                rows.append([action("Проверить чек", f"a:proofs:{ticket.id}", "primary")])
+        reply = [action("Ответить", f"a:reply:{ticket.id}", "primary" if not rows else None)]
         if not wholesale and ticket.payment_stage in {"legacy", "confirmed"}:
             reply.append(action(
                 "Завершить заказ",

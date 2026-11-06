@@ -20,7 +20,7 @@ async def create(env, uid=CLIENT):
 
 async def test_legacy_customer_operator_flow(env):
     await env.message(CLIENT, "/start")
-    assert "Эврикус" in texts(env, CLIENT)[-1]
+    assert "EVERYKYC" in texts(env, CLIENT)[-1]
     assert "c:catalog" in callbacks(last(env, CLIENT))
     await env.callback(CLIENT, "c:prepare")
     assert "c:category:exchanges" in callbacks(last(env, CLIENT))
