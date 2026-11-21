@@ -154,7 +154,7 @@ footer{padding:0 28px 25px;color:#53636e;font-size:12px;max-width:1500px;margin:
 }
 .dark .bubble.rich {--accent:#8bc4ff}
 .bubble.rich .caption {padding:9px 8px 2px}
-.bubble.rich .keyboard {padding:0 8px 17px;margin-top:8px;gap:8px}
+.bubble.rich .keyboard {padding:0 8px 17px;margin:8px 8px 0;gap:8px}
 .bubble.rich .row {gap:8px}
 .bubble.rich .row[data-align="left"] .key {flex:0 1 auto}
 .bubble.rich .key {
@@ -208,7 +208,7 @@ for(const [width,dark] of [[320,false],[390,false],[320,true],[390,true]]){
  frame.querySelector('.profile-bio span').textContent=data.brand.short_description;
  frame.querySelector('.description-body').textContent=data.brand.description;
  frame.querySelector('.description-card img').src=data.brand.banner;
- frame.querySelector('.start-button').onclick=()=>{state='';show('x:onboarding:full');notice.textContent='Прочитайте правила и нажмите «Прочитал и согласен», чтобы открыть каталог.'};
+ frame.querySelector('.start-button').onclick=()=>{state='';show('x:onboarding:full');notice.textContent='Прочитайте правила и нажмите «Принимаю правила», чтобы открыть каталог.'};
  document.querySelector('#frames').append(frame);
 }
 function currentCard(){

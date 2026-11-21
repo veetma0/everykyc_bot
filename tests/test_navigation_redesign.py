@@ -21,9 +21,10 @@ def existing_discussion(env):
 async def test_home_groups_primary_action_navigation_and_rules(env):
     await env.message(CLIENT, "/start")
     card = last(env, CLIENT)
+    assert "Выберите сервис в каталоге или напишите его название в чат. Бот покажет цену и условия." in card["text"]
     rows = card["reply_markup"]["inline_keyboard"]
     assert [[button["callback_data"] for button in row] for row in rows] == [
-        ["c:catalog"], ["c:profile", "c:help"], ["c:guide:general", "c:rules"],
+        ["c:catalog"], ["c:profile"], ["c:help"], ["c:guide:general", "c:rules"],
     ]
     assert rows[0][0]["style"] == "primary"
     assert "Обсудить опт" not in card["text"]
@@ -46,6 +47,10 @@ async def test_order_history_identifies_service_and_status_with_a_short_numbered
 async def test_active_order_is_reachable_from_home_without_new_order(env):
     ticket = await order(env)
     await env.callback(CLIENT, "c:home")
+    rows = last(env, CLIENT)["reply_markup"]["inline_keyboard"]
+    row_actions = [[button["callback_data"] for button in row] for row in rows]
+    assert ["c:catalog"] in row_actions
+    assert ["c:profile"] in row_actions
     assert callbacks(last(env, CLIENT))[0] == f"c:chat:{ticket.id}"
     await env.callback(CLIENT, callbacks(last(env, CLIENT))[0])
     assert env.store.customer_focus(CLIENT).id == ticket.id
@@ -188,8 +193,16 @@ async def test_existing_legacy_discussion_opens_without_new_ticket_or_notificati
 async def test_only_existing_discussion_remains_reachable_from_home(env):
     discussion = existing_discussion(env)
     await env.message(CLIENT, "/start")
-    assert f"c:chat:{discussion.id}" in callbacks(last(env, CLIENT))
-    assert "c:wholesale" not in callbacks(last(env, CLIENT))
+    card = last(env, CLIENT)
+    resume = f"c:chat:{discussion.id}"
+    assert "Сообщения в этой переписке получает оператор" in card["text"]
+    assert "Цены и условия услуг смотрите в каталоге" in card["text"]
+    assert card["reply_markup"]["inline_keyboard"][0][0]["text"] == "Открыть чат"
+    actions = callbacks(card)
+    assert actions[0] == resume and actions.count(resume) == 1
+    assert "c:catalog" in actions and "c:wholesale" not in actions
+    await env.callback(CLIENT, resume)
+    assert env.store.customer_focus(CLIENT).id == discussion.id
 
 
 async def test_closed_legacy_discussion_cannot_be_recreated_by_old_button(env):

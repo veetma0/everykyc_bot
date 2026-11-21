@@ -83,7 +83,7 @@ OFFERS = {
 }
 SHORT_TITLES = {
     "claude": "Claude", "fragment": "Fragment", "telegram_wallet": "Wallet",
-    "dragon_money": "Dragon M.",
+    "dragon_money": "Dragon M.", "htx": "HTX",
 }
 _NAMED_OFFERS = {
     name.casefold(): selected

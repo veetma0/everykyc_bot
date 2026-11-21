@@ -9,7 +9,7 @@ from telegram.error import BadRequest, EndPointNotFound, TimedOut
 
 from tests.conftest import ADMIN, CLIENT, OTHER, BOT_USER
 from tests.rich_helpers import rendered_panel
-from verifydesk import catalog, media, rich, rules, ui
+from verifydesk import catalog, media, rich, rules, screens, theme, ui
 
 
 def expected_photo(key):
@@ -145,17 +145,27 @@ async def test_button_markup_escapes_display_text_and_preserves_action_values(en
 
 
 def test_width_aware_rows_preserve_labels_order_icons_and_keyboard_fallback():
-    plain = InlineKeyboardButton("Заказы", callback_data="c:profile")
-    logo = InlineKeyboardButton("Заказы", callback_data="c:profile", icon_custom_emoji_id="42")
-    help_button = InlineKeyboardButton("Помощь", callback_data="c:help")
-    keyboard = InlineKeyboardMarkup([[plain, help_button], [logo, help_button]])
+    plain = InlineKeyboardButton("Гид", callback_data="c:guide:general")
+    logo = InlineKeyboardButton("Гид", callback_data="c:guide:general", icon_custom_emoji_id="42")
+    rules_button = InlineKeyboardButton("Правила", callback_data="c:rules")
+    keyboard = InlineKeyboardMarkup([[plain, rules_button], [logo, rules_button]])
     rows = [ElementTree.fromstring(html) for html in rich.button_rows(keyboard)]
     assert [[button.get("data") for button in row] for row in rows] == [
-        ["c:profile", "c:help"], ["c:profile"], ["c:help"],
+        ["c:guide:general", "c:rules"], ["c:guide:general"], ["c:rules"],
     ]
     assert rows[0].get("align") == "left"
     assert rows[1][0][0].attrib == {"emoji-id": "42"}
-    assert keyboard.inline_keyboard == ((plain, help_button), (logo, help_button))
+    assert keyboard.inline_keyboard == ((plain, rules_button), (logo, rules_button))
+
+
+def test_all_priced_service_labels_fit_a_narrow_row_with_their_verified_logos(monkeypatch):
+    monkeypatch.setattr(theme, "_theme", {"enabled": True, "icons": theme.EXCHANGE_ICONS})
+    for category in catalog.CATEGORIES:
+        offers = screens.category_offers(category)
+        for page in range((len(offers) + screens.CATALOG_PAGE_SIZE - 1) // screens.CATALOG_PAGE_SIZE):
+            _, keyboard = screens.category_card(category, page)
+            for _, row in rich.layout_rows(keyboard.inline_keyboard):
+                assert sum(rich._button_width(button) for button in row) + 8 * (len(row) - 1) <= 199
 
 
 async def test_reduced_rating_rows_keep_every_score_and_skip_action(env):

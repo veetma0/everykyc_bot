@@ -179,7 +179,7 @@ class Desk:
         final_page = len(rules.PAGES) - 1
         if data in {f"c:agree:{rules.VERSION}", f"c:agree_full:{rules.VERSION}"}:
             if accepted or self.store.accept_terms(uid, rules.VERSION, final_page):
-                active = self.store.for_user(uid, active_only=True)
+                active = self.home_ticket(uid)
                 if active:
                     card, route = ui.home(self.config.title, active), "c:home"
                 else:
@@ -226,11 +226,16 @@ class Desk:
         except TelegramError:
             pass
         card = (
-            ui.home(self.config.title, self.store.for_user(uid))
+            ui.home(self.config.title, self.home_ticket(uid))
             if mode == "client"
             else self.admin_home(uid)
         )
         await self.screen(update, context, *card, customer=mode == "client", route="c:home" if mode == "client" else "")
+
+    def home_ticket(self, uid):
+        return self.store.for_user(uid, active_only=True) or self.store.for_user(
+            uid, active_only=True, kind="wholesale"
+        )
 
     def customer_chats(self, uid):
         return [ticket for kind in ("order", "wholesale")
@@ -526,7 +531,7 @@ class Desk:
             if ticket:
                 await self.customer_callback(update, context, uid, ["c", "cancel", str(ticket.id), str(ticket.version)])
             else:
-                await self.screen(update, context, *ui.home(self.config.title, self.store.for_user(uid)), route="c:home")
+                await self.screen(update, context, *ui.home(self.config.title, self.home_ticket(uid)), route="c:home")
         elif command in {"/start", "/menu"} and self.is_admin(uid):
             try:
                 commands = customer_commands(True) if self.client_mode(uid) else operator_commands()
@@ -534,13 +539,13 @@ class Desk:
             except TelegramError:
                 pass
             card = (
-                ui.home(self.config.title, self.store.for_user(uid))
+                ui.home(self.config.title, self.home_ticket(uid))
                 if self.client_mode(uid)
                 else self.admin_home(uid)
             )
             await self.screen(update, context, *card)
         else:
-            await self.screen(update, context, *ui.home(self.config.title, self.store.for_user(uid)), route="c:home")
+            await self.screen(update, context, *ui.home(self.config.title, self.home_ticket(uid)), route="c:home")
 
     async def help(self, update, context):
         current = self.store.for_user(update.effective_user.id, active_only=True)
@@ -794,7 +799,7 @@ class Desk:
             await self.screen(
                 update,
                 context,
-                *ui.home(self.config.title, None if preview else self.store.for_user(uid)),
+                *ui.home(self.config.title, None if preview else self.home_ticket(uid)),
             )
         elif verb == "catalog":
             await self.screen(update, context, *screens.catalog_card(), route="c:catalog")

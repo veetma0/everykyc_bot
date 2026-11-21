@@ -41,7 +41,7 @@ def full_card(*, accepted=False):
     """Show the complete versioned text and its single action in one rich message."""
     button = (
         ui.action("Главная", "c:home")
-        if accepted else ui.action("Прочитал и согласен", f"c:agree_full:{VERSION}", "primary")
+        if accepted else ui.action("Принимаю правила", f"c:agree_full:{VERSION}", "primary")
     )
     return "\n\n".join(PAGES), ui.Keyboard([[button]])
 
@@ -62,7 +62,7 @@ def card(page, *, accepted=False):
         rows.append(navigation)
     if page == len(PAGES) - 1 and not accepted:
         text += "\n\nПрочитали все страницы? Подтвердите согласие с правилами, чтобы открыть каталог."
-        rows.append([ui.action("Прочитал и согласен", f"c:agree:{VERSION}")])
+        rows.append([ui.action("Принимаю правила", f"c:agree:{VERSION}")])
     if accepted:
         rows.append([ui.action("Главная", "c:home")])
     return text, ui.Keyboard(rows)

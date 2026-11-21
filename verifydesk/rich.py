@@ -15,9 +15,9 @@ def blocks(message):
     return message.api_kwargs.get("rich_message", {}).get("blocks", ())
 
 
-# Telegram Web K gives a rich row 215 CSS pixels on a 320px screen. Its
-# 16px medium-weight labels have 20px padding on each side and an 8px gap.
-_ROW_WIDTH = 215
+# On a 320px screen Telegram Web K gives a rich row 215 CSS pixels, including
+# 8px side insets. The 16px labels have 20px padding on each side and an 8px gap.
+_ROW_WIDTH = 199
 _BUTTON_PADDING = 40
 _ROW_GAP = 8
 _LABEL_WIDTHS = {

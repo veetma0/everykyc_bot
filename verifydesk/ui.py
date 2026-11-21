@@ -69,19 +69,26 @@ def home(title: str, ticket: Ticket | None):
     ]
     text = (
         f"<b>{escape(title)} · Помощь с верификацией</b>\n\n"
-        "Выберите сервис в каталоге. Если нет открытой переписки, можно сразу написать его название сюда. "
-        "Бот покажет стоимость и условия."
+        "Выберите сервис в каталоге или напишите его название в чат. Бот покажет цену и условия."
     )
     if ticket and ticket.status in OPEN_STATUSES:
-        text = (
-            f"<b>{escape(title)} · Ваш заказ</b>\n\n"
-            f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
-            f" · {catalog.dollars(ticket.price_usd)}\n"
-            f"Заказ №{ticket.id:04d} · {ticket_status(ticket)}\n\n"
-            "Откройте заказ, чтобы продолжить переписку с оператором."
-        )
+        if ticket.kind == "wholesale":
+            text = (
+                f"<b>{escape(title)} · Переписка с оператором</b>\n\n"
+                "Сообщения в этой переписке получает оператор. Цены и условия услуг смотрите в каталоге."
+            )
+            resume = "Открыть чат"
+        else:
+            text = (
+                f"<b>{escape(title)} · Ваш заказ</b>\n\n"
+                f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
+                f" · {catalog.dollars(ticket.price_usd)}\n"
+                f"Заказ №{ticket.id:04d} · {ticket_status(ticket)}\n\n"
+                "Откройте заказ, чтобы продолжить переписку с оператором."
+            )
+            resume = "Продолжить заказ"
         rows = [
-            [action("Продолжить заказ", f"c:chat:{ticket.id}", "primary")],
+            [action(resume, f"c:chat:{ticket.id}", "primary")],
             [action("Каталог", "c:catalog"), action("Заказы", "c:profile")],
             [action("Помощь", "c:help"), action("Правила", "c:rules")],
         ]
@@ -194,7 +201,7 @@ def review_comment_card(ticket: Ticket, stars: int):
         f"<b>{'⭐' * stars}{'☆' * (5 - stars)} · спасибо за оценку!</b>\n"
         f"{conversation_title(ticket)}\n\n"
         "Напишите комментарий одним сообщением или сохраните оценку без комментария.",
-        Keyboard([[action("✓ Без комментария", f"c:review_skip:{ticket.id}")]]),
+        Keyboard([[action("Без комментария", f"c:review_skip:{ticket.id}")]]),
     )
 
 

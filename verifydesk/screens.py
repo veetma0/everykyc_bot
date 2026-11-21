@@ -129,7 +129,7 @@ def unavailable_service():
 def help_card(current=None):
     rows = []
     if current and current.status in OPEN_STATUSES:
-        rows.append([ui.action("Написать по заказу", "c:current", "primary")])
+        rows.append([ui.action("Написать в чат", "c:current", "primary")])
     else:
         rows.append([ui.action("Выбрать услугу", "c:catalog", "primary")])
     rows += [[ui.action("Как это работает", "c:guide:general"), ui.action("Мои данные", "c:privacy")],
