@@ -56,7 +56,6 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
 
     env.require_terms = True
     await read_and_accept(env)
-    await press(env, CLIENT, "c:catalog")
     await press(env, CLIENT, "c:category:other")
     await press(env, CLIENT, "c:service:claude")
     await press(env, CLIENT, "c:order:claude:standard")

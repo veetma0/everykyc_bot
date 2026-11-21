@@ -210,9 +210,9 @@ async def test_old_geo_order_buttons_require_fresh_price_acceptance_and_preserve
 
 async def read_and_accept(env, uid=CLIENT):
     await env.message(uid, "/start")
-    for page in range(1, len(rules.PAGES)):
-        await env.callback(uid, f"c:rules:{rules.VERSION}:{page}")
-    await env.callback(uid, f"c:agree:{rules.VERSION}")
+    agree = f"c:agree_full:{rules.VERSION}"
+    assert agree in callbacks(last(env, uid))
+    await env.callback(uid, agree)
 
 
 @pytest.mark.parametrize("entry", ["/start", "/services", "/status", "/profile", "/help", "/unknown",
@@ -229,8 +229,8 @@ async def test_rules_block_all_customer_entrypoints_without_forwarding_content(e
     else:
         await env.message(CLIENT, entry)
     card = last(env, CLIENT)
-    assert "Правила оказания услуг" in card["text"]
-    assert not any(data.startswith("c:agree:") for data in callbacks(card))
+    assert card["text"] == rules.full_card()[0]
+    assert callbacks(card) == [f"c:agree_full:{rules.VERSION}"]
     assert env.store.for_user(CLIENT) is None
     assert not sent(env, ADMIN)
     assert env.store.terms_state(CLIENT)["accepted_at"] is None
@@ -251,7 +251,7 @@ async def test_rules_require_all_pages_then_explicit_agreement_and_snapshot_orde
     await env.callback(CLIENT, agree)
     state = env.store.terms_state(CLIENT)
     assert state["accepted_version"] == rules.VERSION and state["accepted_at"]
-    assert "c:catalog" in callbacks(last(env, CLIENT))
+    assert "c:category:exchanges" in callbacks(last(env, CLIENT))
     accepted_at = state["accepted_at"]
     await env.callback(CLIENT, agree)
     assert env.store.terms_state(CLIENT)["accepted_at"] == accepted_at
@@ -259,8 +259,58 @@ async def test_rules_require_all_pages_then_explicit_agreement_and_snapshot_orde
     snapshot = env.store.db.execute("SELECT * FROM ticket_terms WHERE ticket_id=?", (ticket.id,)).fetchone()
     assert snapshot["version"] == rules.VERSION and snapshot["accepted_at"] == accepted_at
     await env.callback(CLIENT, "c:rules")
-    assert "Правила оказания услуг" in last(env, CLIENT)["text"]
+    assert rules.full_card()[0] == last(env, CLIENT)["text"]
     assert "c:home" in callbacks(last(env, CLIENT))
+
+
+async def test_complete_rules_require_delivery_and_one_current_agreement(env):
+    env.require_terms = True
+    agree = f"c:agree_full:{rules.VERSION}"
+    await env.callback(CLIENT, agree)
+    assert env.store.terms_state(CLIENT)["accepted_at"] is None
+    assert callbacks(last(env, CLIENT)) == [agree]
+    await env.callback(CLIENT, "c:agree_full:expired")
+    assert env.store.terms_state(CLIENT)["accepted_at"] is None
+    await env.callback(CLIENT, agree)
+    assert "c:category:exchanges" in callbacks(last(env, CLIENT))
+    assert env.store.for_user(CLIENT) is None
+    ticket = await order(env, service="bybit")
+    snapshot = env.store.db.execute("SELECT * FROM ticket_terms WHERE ticket_id=?", (ticket.id,)).fetchone()
+    assert snapshot["version"] == rules.VERSION
+    assert snapshot["accepted_at"] == env.store.terms_state(CLIENT)["accepted_at"]
+
+
+async def test_renewing_terms_with_an_open_order_keeps_the_resume_button(env, monkeypatch):
+    env.require_terms = True
+    await read_and_accept(env)
+    ticket = await order(env, service="bybit")
+    monkeypatch.setattr(rules, "VERSION", "updated")
+    await read_and_accept(env)
+    assert f"c:chat:{ticket.id}" in callbacks(last(env, CLIENT))
+
+
+async def test_rejected_full_rules_fall_back_to_the_sequential_reader(env, monkeypatch):
+    from telegram.error import BadRequest
+
+    env.require_terms = True
+    original = env.request.do_request
+
+    async def reject_long_rich(url, method, request_data=None, **kwargs):
+        if request_data and "rich_message" in request_data.parameters:
+            raise BadRequest("Rich message is not supported")
+        return await original(url, method, request_data, **kwargs)
+
+    monkeypatch.setattr(env.request, "do_request", reject_long_rich)
+    await env.message(CLIENT, "/start")
+    assert rules.PAGES[0] in last(env, CLIENT)["text"]
+    assert env.store.terms_state(CLIENT)["viewed_page"] == 0
+    await env.callback(CLIENT, f"c:agree_full:{rules.VERSION}")
+    assert env.store.terms_state(CLIENT)["accepted_at"] is None
+    for page in range(1, len(rules.PAGES)):
+        await env.callback(CLIENT, f"c:rules:{rules.VERSION}:{page}")
+        assert rules.PAGES[page] in last(env, CLIENT)["text"]
+    await env.callback(CLIENT, f"c:agree:{rules.VERSION}")
+    assert env.store.terms_state(CLIENT)["accepted_version"] == rules.VERSION
 
 
 async def test_consent_survives_restart_and_new_rules_need_new_agreement(env, monkeypatch, tmp_path):
@@ -273,7 +323,7 @@ async def test_consent_survives_restart_and_new_rules_need_new_agreement(env, mo
     old = env.store.terms_state(CLIENT)["accepted_at"]
     monkeypatch.setattr(rules, "VERSION", "newrulesversion")
     await env.callback(CLIENT, "c:order:alipay:standard")
-    assert "Правила оказания услуг" in last(env, CLIENT)["text"]
+    assert rules.full_card()[0] == last(env, CLIENT)["text"]
     await env.callback(CLIENT, "c:agree:staleversion")
     assert env.store.terms_state(CLIENT)["accepted_at"] == old
     assert env.store.for_user(CLIENT) is None
@@ -286,13 +336,13 @@ async def test_operator_admin_access_and_client_onboarding_modes(env):
     await env.message(ADMIN, "/admin")
     assert "Кабинет оператора" in last(env, ADMIN)["text"]
     await env.message(ADMIN, "/client")
-    assert "Правила оказания услуг" in last(env, ADMIN)["text"]
+    assert rules.full_card()[0] in last(env, ADMIN)["text"]
     assert env.store.operator_mode(ADMIN) == "client"
     await env.message(ADMIN, "/admin")
     assert env.store.operator_mode(ADMIN) == "admin"
     await env.callback(ADMIN, "a:mode:client")
     await read_and_accept(env, ADMIN)
-    assert "c:catalog" in callbacks(last(env, ADMIN))
+    assert "c:category:exchanges" in callbacks(last(env, ADMIN))
 
 
 def test_full_rules_are_preserved_without_omitted_paragraphs():
@@ -334,6 +384,17 @@ async def test_failed_rules_delivery_does_not_allow_skipping_to_acceptance(env):
     await env.callback(CLIENT, f"c:rules:{rules.VERSION}:1")
     assert rules.PAGES[0] in last(env, CLIENT)["text"]
     assert env.store.terms_state(CLIENT)["viewed_page"] == 0
+
+
+async def test_ambiguous_full_rules_delivery_does_not_send_a_second_copy(env):
+    from telegram.error import TimedOut
+
+    env.require_terms = True
+    env.request.fail_chat, env.request.fail_error = CLIENT, TimedOut()
+    await env.message(CLIENT, "/start")
+    calls = [method for method, params in env.request.calls if params.get("chat_id") == CLIENT]
+    assert calls == ["sendRichMessage"]
+    assert env.store.terms_state(CLIENT) is None
 
 
 async def test_source_is_retained_while_customer_reads_rules(env):

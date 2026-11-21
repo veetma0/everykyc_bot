@@ -26,8 +26,7 @@ def category_page(offer):
 
 def _service_button(offer):
     # Short names keep both columns readable on narrow Telegram clients.
-    title = {"claude": "Claude", "fragment": "Fragment", "telegram_wallet": "Wallet",
-             "dragon_money": "Dragon M."}.get(offer.service, offer.title)
+    title = catalog.SHORT_TITLES.get(offer.service, offer.title)
     label = f"{title} · {catalog.offer_price(offer)}" if offer.available else f"⛔ {title}"
     return ui.action(label, f"c:service:{offer.service}")
 
@@ -90,7 +89,7 @@ def offer_card(offer):
             "<b>Оформление без списаний.</b>"
         )
         rows.append([ui.action(
-            f"Оформить заказ · {catalog.offer_price(offer)}", f"c:order:{offer.service}:{offer.plan}", "primary",
+            f"Заказать · {catalog.offer_price(offer)}", f"c:order:{offer.service}:{offer.plan}", "primary",
         )])
     rows.append([ui.action(f"‹ {catalog.CATEGORIES[offer.category]}", f"c:category:{offer.category}:{category_page(offer)}"),
                  ui.action("В каталог", "c:catalog")])
@@ -145,6 +144,38 @@ def help_card(current=None):
         "Загружайте их только на официальной странице проверки аккаунта. Для разбора ошибки достаточно её текста.",
         ui.Keyboard(rows),
     )
+
+
+def orders_card(tickets, offset, total, user_id, admin=False):
+    text = "<b>История заказов</b>\n\n"
+    text += f"Страница {offset // 8 + 1} из {(total + 7) // 8} · Всего {total}" if tickets else "Заказов пока нет."
+    rows = []
+    for ticket in tickets:
+        wholesale = ticket.kind == "wholesale"
+        title = "Переписка об опте" if wholesale else catalog.service_title(ticket.service_code, ticket.plan_code)
+        number = f"№{ticket.id:04d}"
+        status = ticket_status(ticket)
+        if admin:
+            label = f"{status.split()[0]} {number} · {ui.clip_text(title, 26)}"
+        else:
+            text += f"\n\n<b>{number} · {escape(title)}</b>\n{escape(status)}"
+            label = f"{'Переписка' if wholesale else 'Заказ'} {number}"
+        rows.append([ui.action(label, f"{'a' if admin else 'c'}:view:{ticket.id}")])
+    if tickets:
+        text += "\n\nВыберите заказ, чтобы открыть детали и переписку."
+    navigation = []
+    base = f"a:orders:{user_id}" if admin else "c:orders"
+    if offset:
+        navigation.append(ui.action("← Назад", f"{base}:{max(0, offset - 8)}"))
+    if offset + 8 < total:
+        navigation.append(ui.action("Далее →", f"{base}:{offset + 8}"))
+    if navigation:
+        rows.append(navigation)
+    if admin:
+        rows.append([ui.action("‹ К клиенту", f"a:client:{user_id}")])
+    else:
+        rows.append([ui.action("‹ Мои заказы", "c:profile"), ui.action("Главная", "c:home")])
+    return text, ui.Keyboard(rows)
 
 
 def profile_card(profile, current, timezone, admin=False, has_history=None):

@@ -13,65 +13,56 @@ from tempfile import TemporaryDirectory
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from verifydesk import catalog, rules, screens, ui  # noqa: E402
+from verifydesk import catalog, rich, rules, screens, ui  # noqa: E402
 from verifydesk.media import cover_for  # noqa: E402
-from verifydesk.store import OPEN_STATUSES, Store, ticket_status  # noqa: E402
+from verifydesk.store import OPEN_STATUSES, Store  # noqa: E402
 
 
-def card(value, route=None):
+def card(value, route=None, *, customer=False):
     text, keyboard = value
-    return {"text": text, "rows": keyboard.to_dict()["inline_keyboard"] if keyboard else [],
-            "cover": cover_for(route, text) if route else None}
+    is_rich = bool(keyboard and (route or customer))
+    layout = list(rich.layout_rows(keyboard.inline_keyboard)) if is_rich else []
+    rows = [buttons for _, buttons in layout] if is_rich else (keyboard.inline_keyboard if keyboard else [])
+    return {"text": text, "rows": [[button.to_dict() for button in row] for row in rows],
+            "align": [align for align, _ in layout], "cover": cover_for(route, text) if route else None,
+            "rich": is_rich}
 
 
 def sample_orders_card(ticket=None):
-    """Render the same order-list layout with zero or one synthetic order."""
-    rows = []
-    if ticket:
-        title = catalog.service_title(ticket.service_code, ticket.plan_code)
-        rows.append([ui.action(
-            f"{ticket_status(ticket).split()[0]} №{ticket.id:04d} · {ui.clip_text(title, 26)}",
-            f"c:view:{ticket.id}",
-        )])
-    rows.append([ui.action("‹ Мои заказы", "c:profile"), ui.action("Главная", "c:home")])
-    return card((
-        "<b>История заказов</b>\n\n" + (
-            "Страница 1 из 1 · Всего 1\nВыберите заказ, чтобы открыть детали и переписку."
-            if ticket else "Заказов пока нет."
-        ), ui.Keyboard(rows),
-    ), "c:orders:0")
+    tickets = [ticket] if ticket else []
+    return card(screens.orders_card(tickets, 0, len(tickets), 1), "c:orders:0")
 
 
 def export_cards():
-    cards = {"c:home": card(ui.home(catalog.BRAND_NAME, None)),
-             "c:catalog": card(screens.catalog_card()),
-             "c:help": card(screens.help_card()),
-             "c:privacy": card((ui.PRIVACY, ui.Keyboard([[ui.action("Главная", "c:home")]])))}
+    cards = {"c:home": card(ui.home(catalog.BRAND_NAME, None), customer=True),
+             "c:catalog": card(screens.catalog_card(), customer=True),
+             "c:help": card(screens.help_card(), customer=True),
+             "c:privacy": card((ui.PRIVACY, ui.Keyboard([[ui.action("Главная", "c:home")]])), customer=True)}
     for category in catalog.CATEGORIES:
         offers = screens.category_offers(category)
         for page in range((len(offers) + screens.CATALOG_PAGE_SIZE - 1) // screens.CATALOG_PAGE_SIZE):
-            cards[f"c:category:{category}:{page}"] = card(screens.category_card(category, page))
+            cards[f"c:category:{category}:{page}"] = card(screens.category_card(category, page), customer=True)
         cards[f"c:category:{category}"] = cards[f"c:category:{category}:0"]
     for offer in catalog.OFFERS.values():
-        cards[f"c:service:{offer.service}"] = card(screens.offer_card(offer))
+        cards[f"c:service:{offer.service}"] = card(screens.offer_card(offer), customer=True)
         cards[f"c:guide:{offer.service}"] = card((screens.guide(offer.service), ui.Keyboard([
             [ui.action("‹ К заказу", "c:current")],
-        ])))
+        ])), customer=True)
     cards["c:guide:general"] = card((screens.guide("general"), ui.Keyboard([
         [ui.action("Каталог услуг", "c:catalog")],
         [ui.action("‹ Помощь", "c:help"), ui.action("Главная", "c:home")],
-    ])))
+    ])), customer=True)
     for page in range(len(rules.PAGES)):
-        cards[f"c:rules:{rules.VERSION}:{page}"] = card(rules.card(page, accepted=True))
-    cards["c:rules"] = cards[f"c:rules:{rules.VERSION}:0"]
-    samples, examples = {}, {}
+        cards[f"c:rules:{rules.VERSION}:{page}"] = card(rules.card(page, accepted=True), customer=True)
+    cards["c:rules"] = card(rules.full_card(accepted=True), customer=True)
+    samples, examples = {}, {"onboarding:full": card(rules.full_card(), "rules:full")}
     for page in range(len(rules.PAGES)):
-        examples[f"onboarding:{page}"] = card(rules.card(page), "c:home")
+        examples[f"onboarding:{page}"] = card(rules.card(page))
     with TemporaryDirectory(prefix="everykyc-preview-") as directory:
         store = Store(Path(directory) / "preview.sqlite3")
         store.remember_user(1, 1, "Пример клиента", None)
         empty = store.profile(1)
-        cards["c:profile"] = card(screens.profile_card(empty, None, "UTC"))
+        cards["c:profile"] = card(screens.profile_card(empty, None, "UTC"), customer=True)
         cards["c:orders:0"] = sample_orders_card()
         ticket, _ = store.create_ticket(1, "bybit", "standard", "50.00")
         profile = store.profile(1)
@@ -126,8 +117,8 @@ def export_cards():
                 examples["admin_profile"] = card(screens.profile_card(profile, current, "UTC", admin=True))
                 for delivery in ("delivered", "uncertain", "failed"):
                     examples[f"reply:{delivery}"] = card(ui.reply_receipt(working, delivery))
-                examples["review_request"] = card(ui.review_request(done))
-                examples["review_comment"] = card(ui.review_comment_card(done, 5))
+                examples["review_request"] = card(ui.review_request(done), "notification:review")
+                examples["review_comment"] = card(ui.review_comment_card(done, 5), "c:rate")
         store.close()
     for route, panel in cards.items():
         panel["cover"] = cover_for(route, panel["text"])
@@ -156,6 +147,34 @@ select,.reset{border:1px solid #b9c5cc;border-radius:7px;background:white;paddin
 .before-start{display:flex;flex-direction:column;gap:12px}.profile-bio{padding:11px 12px;border-radius:12px;background:#ffffffad;font-size:13px;line-height:1.4}.profile-bio small{display:block;font-size:11px;color:#55717e;margin-bottom:4px}.description-card{border-radius:13px;overflow:hidden;background:#fff}.description-card img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#152724}.description-text{padding:13px 12px 15px;font-size:14px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}.description-title{font-weight:650;display:block;margin-bottom:8px}.dark .profile-bio{background:#203142;color:#edf2f7}.dark .profile-bio small{color:#9eb6c7}.dark .description-card{background:#203142;color:#edf2f7}.start-button{border:0;background:transparent;color:#2679c6;font-family:inherit;font-size:14px;font-weight:650;width:100%;height:38px;cursor:pointer}.dark .start-button{color:#71b8f8}[hidden]{display:none!important}
 .composer{height:51px;flex:none;background:#fff;display:flex;align-items:center;gap:10px;padding:8px 12px;color:#8f9da5;font-size:23px}.input{background:#f1f3f5;border-radius:17px;padding:6px 11px;flex:1;font-size:14px;color:#98a1a8}.dark .phone{border-color:#344454;background:#101b28}.dark .statusbar,.dark .chatbar,.dark .composer{background:#172432;color:#e3ebf1}.dark .chatbar{border-color:#203343}.dark .bubble{background:#203142;color:#edf2f7}.dark .key{background:#21384b;color:#e3eef7}.dark .key:hover{background:#2c455a}.dark .date{background:#1f3346;color:#b9c8d3}.dark .input{background:#213345}.dark .time{color:#90a5b4}
 footer{padding:0 28px 25px;color:#53636e;font-size:12px;max-width:1500px;margin:auto}a{color:#287ca5}button,select{touch-action:manipulation}@media(max-width:1494px){.frames{grid-template-columns:320px 390px}}@media(max-width:760px){header{padding:20px 16px 12px}.frames{grid-template-columns:min(320px,100%);justify-content:center}.frame.wide{display:none}.controls{gap:8px}select,label{max-width:100%}h1{font-size:21px}}@media(max-width:351px){.frames{padding-inline:0}}
+.bubble.rich {
+ --accent:#2375b7;
+ width:calc(100% - 69px);
+ font-size:16px;
+}
+.dark .bubble.rich {--accent:#8bc4ff}
+.bubble.rich .caption {padding:9px 8px 2px}
+.bubble.rich .keyboard {padding:0 8px 17px;margin-top:8px;gap:8px}
+.bubble.rich .row {gap:8px}
+.bubble.rich .row[data-align="left"] .key {flex:0 1 auto}
+.bubble.rich .key {
+ --ink:var(--accent);
+ min-height:40px;
+ padding:6px 20px;
+ border-radius:1000px;
+ background:color-mix(in srgb,var(--ink) 12%,transparent);
+ color:var(--ink);
+ font-size:inherit;
+ font-weight:500;
+}
+.bubble.rich .key span {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bubble.rich .key:hover {background:color-mix(in srgb,var(--ink) 20%,transparent)}
+.bubble.rich .key[data-style="primary"] {background:var(--accent);color:#fff}
+.dark .bubble.rich .key[data-style="primary"] {background:#417ea9}
+.bubble.rich .key[data-style="success"] {--ink:#267a4a}
+.bubble.rich .key[data-style="danger"] {--ink:#b53544}
+.dark .bubble.rich .key[data-style="success"] {--ink:#82d79e}
+.dark .bubble.rich .key[data-style="danger"] {--ink:#ff8891}
 </style></head><body>
 <header><h1 id="preview-title"></h1><p class="note">Предпросмотр Telegram с демонстрационными заказами.</p>
 <nav class="views" aria-label="Вид макета"><button class="view" id="view-chat" aria-pressed="true">Интерфейс бота</button><button class="view" id="view-brand" aria-pressed="false">Профиль и баннер</button></nav>
@@ -178,7 +197,7 @@ for(const [code,title] of Object.entries(data.categories)){
  previousOption=option;
 }
 for(const [code,title] of Object.entries(data.services)){const option=document.createElement('option');option.value=code;option.textContent=title;serviceSelect.append(option)}
-const exampleLabels={'onboarding:0':'Первый вход · правила 1/4','onboarding:1':'Правила 2/4','onboarding:2':'Правила 3/4','onboarding:3':'Правила · согласие','history_customer':'Переписка клиента','history_admin':'Переписка оператора','admin_home':'Кабинет оператора','admin_more':'Оператор · ещё','admin_profile':'Карточка клиента','review_request':'Оценка заказа','review_comment':'Комментарий к оценке','reply:delivered':'Ответ доставлен','reply:uncertain':'Доставка не подтверждена','reply:failed':'Ответ не доставлен'};
+const exampleLabels={'onboarding:full':'Первый вход · все правила','onboarding:0':'Постранично · 1/4','onboarding:1':'Постранично · 2/4','onboarding:2':'Постранично · 3/4','onboarding:3':'Постранично · согласие','history_customer':'Переписка клиента','history_admin':'Переписка оператора','admin_home':'Кабинет оператора','admin_more':'Оператор · ещё','admin_profile':'Карточка клиента','review_request':'Оценка заказа','review_comment':'Комментарий к оценке','reply:delivered':'Ответ доставлен','reply:uncertain':'Доставка не подтверждена','reply:failed':'Ответ не доставлен'};
 const stageLabels={new:'новый',payment:'ожидает оплаты',rejected:'нужен другой чек',review:'чек на проверке',review_ready:'чек просмотрен',working:'в работе',done:'завершён'};for(const key of Object.keys(data.examples)){const option=document.createElement('option');option.value='x:'+key;const [kind,stage]=key.split(':');option.textContent=exampleLabels[key]||`${{admin_ticket:'Заказ оператора',admin_details:'Детали',admin_status:'Статус'}[kind]||kind} · ${stageLabels[stage]||stage}`;exampleSelect.append(option)}
 for(const [width,dark] of [[320,false],[390,false],[320,true],[390,true]]){
  const frame=document.createElement('section');
@@ -189,7 +208,7 @@ for(const [width,dark] of [[320,false],[390,false],[320,true],[390,true]]){
  frame.querySelector('.profile-bio span').textContent=data.brand.short_description;
  frame.querySelector('.description-body').textContent=data.brand.description;
  frame.querySelector('.description-card img').src=data.brand.banner;
- frame.querySelector('.start-button').onclick=()=>{state='';show('x:onboarding:0');notice.textContent='Пример первого входа: правила показаны до каталога. Согласие и действия не сохраняются.'};
+ frame.querySelector('.start-button').onclick=()=>{state='';show('x:onboarding:full');notice.textContent='Прочитайте правила и нажмите «Прочитал и согласен», чтобы открыть каталог.'};
  document.querySelector('#frames').append(frame);
 }
 function currentCard(){
@@ -226,16 +245,21 @@ function show(next){
   bubble.hidden=isProfile;
   keyboard.hidden=isProfile;
   keyboard.replaceChildren();
+  bubble.classList.toggle('rich',Boolean(found?.rich));
+  if(found?.rich)bubble.insertBefore(keyboard,bubble.querySelector('.time'));
+  else bubble.after(keyboard);
   if(!isProfile){
    bubble.querySelector('.caption').innerHTML=found.text;
    const cover=bubble.querySelector('.cover'),name=found.cover;
    cover.hidden=!name;
    if(name)cover.src='../assets/showcase/'+name+'.jpg';
    else cover.removeAttribute('src');
-   for(const buttons of found.rows){
+   for(const [index,buttons] of found.rows.entries()){
     const row=document.createElement('div');row.className='row';
+    if(found.align?.[index])row.dataset.align=found.align[index];
     for(const item of buttons){
-     const key=document.createElement('button');key.className='key';key.textContent=item.text;key.title=item.text;
+     const key=document.createElement('button');key.className='key';key.title=item.text;
+     const label=document.createElement('span');label.textContent=item.text;key.append(label);
      key.dataset.callback=item.callback_data||'';
      if(['primary','success','danger'].includes(item.style))key.dataset.style=item.style;
      key.onclick=()=>navigate(item.callback_data);row.append(key);
@@ -247,7 +271,7 @@ function show(next){
  }
  history.replaceState(null,'','#'+encodeURIComponent(next));
 }
-function navigate(next){notice.textContent='Нажимайте кнопки в любом окне — все темы и размеры обновляются вместе.';if(route.startsWith('x:onboarding:')&&next.startsWith('c:rules:')){show('x:onboarding:'+next.split(':').at(-1));return}if(next.startsWith('c:agree:')){state='';show('c:home');notice.textContent='Это только просмотр: согласие не сохраняется.';return}if(next.startsWith('c:rate:')){show('x:review_comment');notice.textContent='Показан пример комментария к оценке. Отзыв не сохраняется.';return}if(next.startsWith('c:history:')){if(route.startsWith('x:')){service='bybit';state=state||'new'}show(next);notice.textContent=`Пример переписки · ${data.services[service]}. Все сообщения вымышлены.`;return}if(next.startsWith('a:history:')){show('x:history_admin');return}if(next.startsWith('c:order:')){service=next.split(':')[2];state='new';notice.textContent='Показан образец нового заказа. Это только локальный просмотр: заявка не создана, сообщений и оплаты нет.';show('c:current');return}const adminRoutes={'a:home':'admin_home','a:more':'admin_more','a:mode:admin':'admin_home'};if(adminRoutes[next]){show('x:'+adminRoutes[next]);return}if(next.startsWith('a:view:')||next.startsWith('a:next')){show('x:admin_ticket:new');return}if(next.startsWith('a:client:')){show('x:admin_profile');return}if(next.startsWith('a:details:')){show('x:admin_details:working');return}if(next.startsWith('a:status:')){show('x:admin_status:working');return}if(data.cards[next]||next==='c:current'||next.startsWith('c:view:')||next.startsWith('c:chat:')){if(next.startsWith('c:view:')&&!state)state='new';show(next);if(next==='c:orders:0')notice.textContent=state?`Пример истории · ${data.services[service]}. Показан один вымышленный заказ.`:'История без заказов · локальный пример.';return}notice.textContent='Это действие не выполняется в локальном макете. Нужный пример состояния можно открыть в списке «Другие экраны».';}
+function navigate(next){notice.textContent='Нажимайте кнопки в любом окне — все темы и размеры обновляются вместе.';if(route.startsWith('x:onboarding:')&&next.startsWith('c:rules:')){show('x:onboarding:'+next.split(':').at(-1));return}if(next.startsWith('c:agree:')||next.startsWith('c:agree_full:')){show(state?'c:home':'c:catalog');notice.textContent='Это только просмотр: согласие не сохраняется.';return}if(next.startsWith('c:rate:')){show('x:review_comment');notice.textContent='Показан пример комментария к оценке. Отзыв не сохраняется.';return}if(next.startsWith('c:history:')){if(route.startsWith('x:')){service='bybit';state=state||'new'}show(next);notice.textContent=`Пример переписки · ${data.services[service]}. Все сообщения вымышлены.`;return}if(next.startsWith('a:history:')){show('x:history_admin');return}if(next.startsWith('c:order:')){service=next.split(':')[2];state='new';notice.textContent='Показан образец нового заказа. Это только локальный просмотр: заявка не создана, сообщений и оплаты нет.';show('c:current');return}const adminRoutes={'a:home':'admin_home','a:more':'admin_more','a:mode:admin':'admin_home'};if(adminRoutes[next]){show('x:'+adminRoutes[next]);return}if(next.startsWith('a:view:')||next.startsWith('a:next')){show('x:admin_ticket:new');return}if(next.startsWith('a:client:')){show('x:admin_profile');return}if(next.startsWith('a:details:')){show('x:admin_details:working');return}if(next.startsWith('a:status:')){show('x:admin_status:working');return}if(data.cards[next]||next==='c:current'||next.startsWith('c:view:')||next.startsWith('c:chat:')){if(next.startsWith('c:view:')&&!state)state='new';show(next);if(next==='c:orders:0')notice.textContent=state?`Пример истории · ${data.services[service]}. Показан один вымышленный заказ.`:'История без заказов · локальный пример.';return}notice.textContent='Это действие не выполняется в локальном макете. Нужный пример состояния можно открыть в списке «Другие экраны».';}
 document.querySelector('#view-chat').onclick=()=>navigate('c:home');document.querySelector('#view-brand').onclick=()=>{show('b:profile');notice.textContent='Пример оформления профиля перед первым запуском. Баннер и тексты показаны из файлов проекта; это не подтверждение публикации.'};screen.onchange=()=>navigate(screen.value);exampleSelect.onchange=()=>{if(exampleSelect.value){service='bybit';show(exampleSelect.value);notice.textContent='Локальный пример Bybit: данные вымышлены, действий в Telegram нет.'}};stateSelect.onchange=()=>{state=stateSelect.value;notice.textContent=state?'Показан только образец состояния заказа. Реальных заказов и платежей нет.':'Показан интерфейс без активного заказа.';show(state?'c:current':'c:home')};serviceSelect.onchange=()=>{service=serviceSelect.value;show(state?'c:current':`c:service:${service}`)};document.querySelector('#reset').onclick=()=>{state='';service='bybit';navigate('c:home')};
 const params=new URLSearchParams(location.search);if(data.samples[params.get('service')])service=params.get('service');if(['new','payment','rejected','review','working','done'].includes(params.get('state')))state=params.get('state');let initial=decodeURIComponent(location.hash.slice(1));show(initial==='b:profile'||data.cards[initial]||data.examples[initial.slice(2)]||initial.startsWith('c:history:')||(initial==='c:current'&&state)?initial:'c:home');
 </script></body></html>'''

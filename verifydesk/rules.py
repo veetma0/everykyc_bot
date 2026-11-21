@@ -37,6 +37,15 @@ def _pages():
 PAGES = _pages()
 
 
+def full_card(*, accepted=False):
+    """Show the complete versioned text and its single action in one rich message."""
+    button = (
+        ui.action("Главная", "c:home")
+        if accepted else ui.action("Прочитал и согласен", f"c:agree_full:{VERSION}", "primary")
+    )
+    return "\n\n".join(PAGES), ui.Keyboard([[button]])
+
+
 def card(page, *, accepted=False):
     text = (
         f"<b>Правила оказания услуг</b> · {page + 1}/{len(PAGES)}\n\n"

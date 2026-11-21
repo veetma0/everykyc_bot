@@ -8,6 +8,7 @@ from telegram.error import BadRequest, TimedOut
 
 from verifydesk import catalog, screens, theme, ui
 from verifydesk.bot import deliver
+from .rich_helpers import rendered_panel
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +29,7 @@ def enable(tmp_path):
 async def test_known_custom_emoji_rejection_falls_back_once(tmp_path):
     enable(tmp_path)
     bot = SimpleNamespace(
-        send_message=AsyncMock(
+        do_api_request=AsyncMock(
             side_effect=[BadRequest("Custom emoji unavailable"), SimpleNamespace(message_id=1)]
         )
     )
@@ -37,11 +38,13 @@ async def test_known_custom_emoji_rejection_falls_back_once(tmp_path):
     )
     result, state = await deliver(bot, 101, '<tg-emoji emoji-id="123456">⭐</tg-emoji> Текст', keyboard)
     assert state == "delivered" and result.message_id == 1
-    assert bot.send_message.await_count == 2
-    second = bot.send_message.await_args_list[-1].kwargs
+    assert bot.do_api_request.await_count == 2
+    method, payload = bot.do_api_request.await_args_list[-1].args
+    assert method == "sendRichMessage"
+    second = rendered_panel(payload)
     assert "tg-emoji" not in second["text"]
-    assert second["reply_markup"].inline_keyboard[0][0].icon_custom_emoji_id is None
-    assert second["reply_markup"].inline_keyboard[0][0].style == "primary"
+    button = second["reply_markup"]["inline_keyboard"][0][0]
+    assert "icon_custom_emoji_id" not in button and button["style"] == "primary"
     assert not theme.enabled()
 
 

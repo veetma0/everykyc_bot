@@ -10,7 +10,7 @@ from telegram import InputMediaPhoto, Message
 from telegram.constants import MessageLimit, ParseMode
 from telegram.error import BadRequest
 
-from . import catalog, ui
+from . import catalog, rich, ui
 
 
 ART_DIR = Path(__file__).resolve().parents[1] / "assets" / "showcase"
@@ -68,12 +68,14 @@ class PanelPhotos:
             (self.bot_id, message.photo[-1].file_unique_id),
         ).fetchone())
 
-    async def show(self, bot, chat_id, source, cover, text, keyboard):
+    async def show(self, bot, chat_id, source, cover, text, keyboard, *, use_rich=False):
         """Send or edit; caller handles rejected edits and ambiguous network errors."""
         common = dict(chat_id=chat_id, reply_markup=keyboard)
         if source:
             common["message_id"] = source.message_id
         if not cover:
+            if use_rich:
+                return await rich.show_rich(bot, chat_id, source, text, keyboard)
             if source:
                 return await bot.edit_message_text(**common, text=text, parse_mode=ParseMode.HTML,
                                                    disable_web_page_preview=True)
@@ -85,10 +87,12 @@ class PanelPhotos:
             "SELECT file_id, unique_id FROM panel_photos WHERE bot_id=? AND digest=?",
             (self.bot_id, digest),
         ).fetchone()
-        if source and source.photo and cached and source.photo[-1].file_unique_id == cached["unique_id"]:
+        if not use_rich and source and source.photo and cached and source.photo[-1].file_unique_id == cached["unique_id"]:
             return await bot.edit_message_caption(**common, caption=text, parse_mode=ParseMode.HTML)
 
         async def photo(value):
+            if use_rich:
+                return await rich.show_rich(bot, chat_id, source, text, keyboard, photo=value)
             if source:
                 return await bot.edit_message_media(
                     **common, media=InputMediaPhoto(
@@ -106,10 +110,15 @@ class PanelPhotos:
                                      ("file reference", "file_reference", "file identifier", "file_id")):
                 raise
             result = await photo(path)
-        if result.photo:
-            saved = result.photo[-1]
-            if not cached or (saved.file_id, saved.file_unique_id) != (cached["file_id"], cached["unique_id"]):
+        if use_rich:
+            sizes = next((b["photo"] for b in rich.blocks(result) if b["type"] == "photo"), ())
+        else:
+            sizes = [p.to_dict() for p in result.photo]
+        if sizes:
+            saved = sizes[-1]
+            file_id, unique_id = saved["file_id"], saved["file_unique_id"]
+            if not cached or (file_id, unique_id) != (cached["file_id"], cached["unique_id"]):
                 with self.db:
                     self.db.execute("INSERT OR REPLACE INTO panel_photos VALUES(?,?,?,?)",
-                                    (self.bot_id, digest, saved.file_id, saved.file_unique_id))
+                                    (self.bot_id, digest, file_id, unique_id))
         return result

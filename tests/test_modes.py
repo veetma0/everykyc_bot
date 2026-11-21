@@ -261,6 +261,6 @@ async def test_startup_restores_command_menu_for_persisted_client_mode(env):
     scoped = [params for method, params in env.request.calls
               if method == 'setMyCommands' and params.get('scope', {}).get('chat_id') == ADMIN]
     commands = {item['command'] for item in scoped[-1]['commands']}
-    assert commands == {'start', 'services', 'status', 'profile', 'help', 'admin'}
+    assert commands == {'start', 'services', 'status', 'profile', 'help', 'classic', 'modern', 'admin'}
     assert 'clients' not in commands
     assert env.store.operator_mode(ADMIN) == 'client'

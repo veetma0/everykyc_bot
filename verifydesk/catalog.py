@@ -81,6 +81,23 @@ OFFERS = {
     for category, rows in _SERVICE_ROWS.items()
     for code, title, price in rows
 }
+SHORT_TITLES = {
+    "claude": "Claude", "fragment": "Fragment", "telegram_wallet": "Wallet",
+    "dragon_money": "Dragon M.",
+}
+_NAMED_OFFERS = {
+    name.casefold(): selected
+    for selected in OFFERS.values()
+    for name in (selected.title, selected.service, SHORT_TITLES.get(selected.service, selected.title))
+}
+_NAMED_OFFERS["huobi"] = OFFERS[("htx", "standard")]
+
+
+def named_offer(text: str) -> Offer | None:
+    """Match a complete service name; ordinary chat messages never match a substring."""
+    return _NAMED_OFFERS.get(" ".join(text.casefold().split()))
+
+
 RETIRED_SERVICES = {"chatgpt": "ChatGPT", "gemini": "Gemini"}
 HISTORICAL_TITLES = {("claude", "armenia"): "Claude", ("claude", "europe"): "Claude"}
 

@@ -64,13 +64,13 @@ def conversation_keyboard(tickets, selected_id=None):
 def home(title: str, ticket: Ticket | None):
     rows = [
         [action("Каталог услуг", "c:catalog", "primary")],
-        [action("Мои заказы", "c:profile"), action("Помощь", "c:help")],
-        [action("Как это работает", "c:guide:general"), action("Правила", "c:rules")],
+        [action("Заказы", "c:profile"), action("Помощь", "c:help")],
+        [action("Гид", "c:guide:general"), action("Правила", "c:rules")],
     ]
     text = (
         f"<b>{escape(title)} · Помощь с верификацией</b>\n\n"
-        "Застряли на проверке личности? Выберите свой сервис в каталоге. "
-        "В карточке увидите цену, а после оформления сможете написать оператору прямо здесь."
+        "Выберите сервис в каталоге. Если нет открытой переписки, можно сразу написать его название сюда. "
+        "Бот покажет стоимость и условия."
     )
     if ticket and ticket.status in OPEN_STATUSES:
         text = (
@@ -82,7 +82,7 @@ def home(title: str, ticket: Ticket | None):
         )
         rows = [
             [action("Продолжить заказ", f"c:chat:{ticket.id}", "primary")],
-            [action("Каталог услуг", "c:catalog"), action("Мои заказы", "c:profile")],
+            [action("Каталог", "c:catalog"), action("Заказы", "c:profile")],
             [action("Помощь", "c:help"), action("Правила", "c:rules")],
         ]
     return text, Keyboard(rows)
@@ -183,7 +183,7 @@ def review_request(ticket: Ticket):
         f"<b>⭐ Как всё прошло?</b>\n{conversation_title(ticket)}\n\n"
         "Оцените работу от 1 до 5 звёзд. После оценки можно добавить комментарий.",
         Keyboard([
-            [action(f"{stars} ⭐", f"c:rate:{ticket.id}:{stars}") for stars in range(1, 6)],
+            [action(str(stars), f"c:rate:{ticket.id}:{stars}") for stars in range(1, 6)],
             [action("Не сейчас", "c:home")],
         ]),
     )

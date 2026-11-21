@@ -122,6 +122,7 @@ class Store:
                 viewed_version TEXT NOT NULL, viewed_page INTEGER NOT NULL,
                 accepted_version TEXT, accepted_at REAL
             );
+            CREATE TABLE IF NOT EXISTS classic_chats (chat_id INTEGER PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS tickets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL REFERENCES users(id),
@@ -290,6 +291,22 @@ class Store:
             self.db.execute(
                 "CREATE INDEX IF NOT EXISTS unread_customer_messages ON messages(ticket_id,id) WHERE role='user'"
             )
+
+    def uses_classic(self, chat_id: int) -> bool:
+        return self.db.execute("SELECT 1 FROM classic_chats WHERE chat_id=?", (chat_id,)).fetchone() is not None
+
+    def set_classic(self, chat_id: int, user_id: int, enabled: bool):
+        with self.db:
+            if enabled:
+                inserted = self.db.execute("INSERT OR IGNORE INTO classic_chats VALUES(?)", (chat_id,)).rowcount
+                if inserted:
+                    # A rich message delivered to an older client may never have been readable.
+                    self.db.execute(
+                        "UPDATE user_terms SET viewed_page=-1 WHERE user_id=? AND "
+                        "(accepted_version IS NULL OR accepted_version<>viewed_version)", (user_id,),
+                    )
+            else:
+                self.db.execute("DELETE FROM classic_chats WHERE chat_id=?", (chat_id,))
 
     def terms_state(self, user_id):
         return self.db.execute("SELECT * FROM user_terms WHERE user_id=?", (user_id,)).fetchone()

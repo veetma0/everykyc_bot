@@ -49,7 +49,8 @@ async def test_plain_text_requires_consent_and_ticket(env):
     await env.message(CLIENT, "Нужна помощь")
     assert env.store.for_user(CLIENT) is None
     assert "не отправлено" in texts(env, CLIENT)[-1]
-    assert "c:catalog" in callbacks(last(env, CLIENT))
+    assert "c:category:wallets" in callbacks(last(env, CLIENT))
+    assert "c:service:claude" in callbacks(last(env, CLIENT))
     assert not any("Нужна помощь" in text for text in texts(env, ADMIN))
 
 
@@ -229,7 +230,7 @@ async def test_html_is_escaped_and_long_messages_have_full_view(env):
     await env.message(CLIENT, body)
     assert "&lt;b&gt;" in texts(env, ADMIN)[-1]
     await env.callback(CLIENT, f"c:history:{ticket.id}:0")
-    markup = env.request.calls[-1][1]["reply_markup"]
+    markup = last(env, CLIENT)["reply_markup"]
     assert any(
         ":message:" in button.get("callback_data", "") for row in markup["inline_keyboard"] for button in row
     )

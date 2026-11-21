@@ -2,7 +2,7 @@
 
 import pytest
 
-from verifydesk import rules
+from verifydesk import catalog, rules
 
 from .conftest import ADMIN, CLIENT
 from .test_upgrade import callbacks, last, order, sent
@@ -31,6 +31,18 @@ async def test_home_groups_primary_action_navigation_and_rules(env):
     assert not sent(env, ADMIN)
 
 
+async def test_order_history_identifies_service_and_status_with_a_short_numbered_button(env):
+    await env.callback(CLIENT, "c:order:fragment:standard")
+    ticket = env.store.for_user(CLIENT, active_only=True)
+    await env.callback(CLIENT, "c:orders:0")
+    card = last(env, CLIENT)
+    assert f"№{ticket.id:04d} · Telegram Fragment" in card["text"]
+    assert "Ожидает оператора" in card["text"]
+    assert card["reply_markup"]["inline_keyboard"][0][0]["text"] == f"Заказ №{ticket.id:04d}"
+    await env.callback(CLIENT, f"c:view:{ticket.id}")
+    assert "Telegram Fragment" in last(env, CLIENT)["text"]
+
+
 async def test_active_order_is_reachable_from_home_without_new_order(env):
     ticket = await order(env)
     await env.callback(CLIENT, "c:home")
@@ -38,6 +50,77 @@ async def test_active_order_is_reachable_from_home_without_new_order(env):
     await env.callback(CLIENT, callbacks(last(env, CLIENT))[0])
     assert env.store.customer_focus(CLIENT).id == ticket.id
     assert ticket_count(env) == 1
+
+
+async def test_all_home_entry_points_keep_individual_service_buttons_in_catalog(env):
+    def check_home(uid):
+        rows = last(env, uid)["reply_markup"]["inline_keyboard"]
+        buttons = [button for row in rows for button in row]
+        assert any(b["callback_data"].endswith(":catalog") for b in buttons)
+        assert not any(b["callback_data"].split(":")[1] in {"service", "offer", "order"} for b in buttons)
+        assert not any(name in b["text"].casefold() for b in buttons for name in ("claude", "bybit", "alipay"))
+
+    for command in ("/start", "/menu"):
+        await env.message(CLIENT, command)
+        check_home(CLIENT)
+    ticket = await order(env)
+    await env.callback(CLIENT, "c:home")
+    check_home(CLIENT)
+    env.store.set_status(ticket.id, ticket.version, "cancelled", ADMIN)
+    await env.callback(CLIENT, "c:home")
+    check_home(CLIENT)
+    await env.message(ADMIN, "/preview")
+    check_home(ADMIN)
+    await env.callback(ADMIN, "p:home")
+    check_home(ADMIN)
+    await env.message(ADMIN, "/client")
+    check_home(ADMIN)
+
+
+def test_named_offer_recognizes_displayed_names_but_not_unrelated_messages():
+    for selected in catalog.OFFERS.values():
+        assert catalog.named_offer(selected.title.swapcase()) == selected
+        assert catalog.named_offer(catalog.SHORT_TITLES.get(selected.service, selected.title)) == selected
+    assert catalog.named_offer(" telegram   wallet ") == catalog.offer("telegram_wallet", "standard")
+    assert catalog.named_offer("Huobi") == catalog.offer("htx", "standard")
+    assert catalog.named_offer("Я хотел спросить про Bybit") is None
+    assert catalog.named_offer("Cryp") is None
+
+
+async def test_exact_service_name_opens_offer_then_creates_order_in_one_click(env):
+    await env.message(CLIENT, "  CoinList  ")
+    card = last(env, CLIENT)
+    assert "CoinList" in card["text"] and "$50" in card["text"]
+    assert ticket_count(env) == 0
+    assert not sent(env, ADMIN)
+    cta = callbacks(card)[0]
+    assert cta == "c:order:coinlist:standard"
+    await env.callback(CLIENT, cta)
+    ticket = env.store.for_user(CLIENT)
+    assert (ticket.service_code, ticket.price_usd) == ("coinlist", "50.00")
+    await env.message(CLIENT, "Bybit", message_id=9584)
+    assert env.store.find_source(CLIENT, 9584)["ticket_id"] == ticket.id
+    assert ticket_count(env) == 1
+
+
+async def test_exact_service_name_in_existing_discussion_is_delivered(env):
+    discussion = existing_discussion(env)
+    await env.message(CLIENT, "Claude", message_id=9585)
+    assert env.store.find_source(CLIENT, 9585)["ticket_id"] == discussion.id
+    assert env.store.for_user(CLIENT) is None
+
+
+async def test_legacy_conversation_switches_do_not_duplicate_visible_order_action(env):
+    discussion = existing_discussion(env)
+    ticket = await order(env)
+    for entry, order_action in (("c:profile", f"c:view:{ticket.id}"), ("c:help", "c:current")):
+        await env.callback(CLIENT, entry)
+        actions = callbacks(last(env, CLIENT))
+        assert order_action in actions
+        assert f"c:chat:{ticket.id}" not in actions
+        assert f"c:chat:{discussion.id}" in actions
+    await env.callback(CLIENT, f"c:chat:{discussion.id}")
+    assert env.store.customer_focus(CLIENT).id == discussion.id
 
 
 @pytest.mark.parametrize("service", ["claude", "bybit", "alipay"])

@@ -9,6 +9,7 @@ from verifydesk.store import Store
 
 from .conftest import ADMIN, CLIENT, OTHER
 from .payment_helpers import legacy_ticket
+from .rich_helpers import rendered_panel
 
 
 def sent(env, uid=None):
@@ -16,7 +17,9 @@ def sent(env, uid=None):
     for method, params in env.request.calls:
         if uid is not None and params.get("chat_id") != uid:
             continue
-        if method in {"sendMessage", "editMessageText"}:
+        if "rich_message" in params:
+            messages.append(rendered_panel(params))
+        elif method in {"sendMessage", "editMessageText"}:
             messages.append(params)
         elif method in {"editMessageMedia", "editMessageCaption"} or (
             method == "sendPhoto" and not isinstance(params.get("photo"), str)

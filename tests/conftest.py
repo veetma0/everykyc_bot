@@ -7,6 +7,8 @@ import pytest
 from telegram import Update
 from telegram.request import BaseRequest
 
+from .rich_helpers import response_blocks
+
 from verifydesk.bot import build_application
 from verifydesk import catalog, rules
 from verifydesk.config import Config
@@ -57,7 +59,7 @@ class FakeTelegram(BaseRequest):
                 "has_custom_certificate": False,
                 "pending_update_count": 0,
             }
-        elif name in {"sendMessage", "editMessageText", "sendPhoto", "sendDocument", "editMessageMedia", "editMessageCaption"}:
+        elif name in {"sendRichMessage", "sendMessage", "editMessageText", "sendPhoto", "sendDocument", "editMessageMedia", "editMessageCaption"}:
             if self.fail_chat == params["chat_id"] and self.fail_error:
                 raise self.fail_error
             result = {
@@ -67,7 +69,9 @@ class FakeTelegram(BaseRequest):
                 "from": BOT_USER,
 
             }
-            if name in {"sendMessage", "editMessageText"}:
+            if "rich_message" in params:
+                result["rich_message"] = {"blocks": response_blocks(params, request_data.multipart_data)}
+            elif name in {"sendMessage", "editMessageText"}:
                 result["text"] = params["text"]
             elif name == "sendDocument":
                 result["caption"] = params.get("caption", "")
@@ -89,6 +93,12 @@ class FakeTelegram(BaseRequest):
             if "inline_keyboard" in params.get("reply_markup", {}):
                 result["reply_markup"] = params["reply_markup"]
             self.messages[(params["chat_id"], result["message_id"])] = result
+        elif name == "editMessageReplyMarkup" and (params["chat_id"], params["message_id"]) in self.messages:
+            result = self.messages[(params["chat_id"], params["message_id"])]
+            if "reply_markup" in params:
+                result["reply_markup"] = params["reply_markup"]
+            else:
+                result.pop("reply_markup", None)
         else:
             result = True
         return 200, json.dumps({"ok": True, "result": result}).encode()
