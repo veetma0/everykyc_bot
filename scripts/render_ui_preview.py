@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from verifydesk import catalog, rich, rules, screens, ui  # noqa: E402
+from verifydesk import catalog, rich, rules, screens, theme, ui  # noqa: E402
 from verifydesk.media import cover_for  # noqa: E402
 from verifydesk.store import OPEN_STATUSES, Store  # noqa: E402
 
@@ -56,6 +56,7 @@ def export_cards():
         cards[f"c:rules:{rules.VERSION}:{page}"] = card(rules.card(page, accepted=True), customer=True)
     cards["c:rules"] = card(rules.full_card(accepted=True), customer=True)
     samples, examples = {}, {"onboarding:full": card(rules.full_card(), "rules:full")}
+    open_offers, offer_paragraphs = {}, {}
     for page in range(len(rules.PAGES)):
         examples[f"onboarding:{page}"] = card(rules.card(page))
     with TemporaryDirectory(prefix="everykyc-preview-") as directory:
@@ -98,6 +99,21 @@ def export_cards():
                 ui.history(current, sample_messages, history_total, 0, False, "UTC"), "c:history:1:0",
             )
             samples[offer.service]["context"] = {}
+            # The same active order can be visible on any service card. Intern
+            # recurring paragraphs so every combination uses the actual bot copy.
+            samples[offer.service]["open_offers"] = {}
+            for selected in catalog.OFFERS.values():
+                if not selected.available:
+                    continue
+                panel = screens.offer_card(selected, current)
+                if selected.service not in open_offers:
+                    exported = card(panel, f"c:service:{selected.service}")
+                    del exported["text"]
+                    open_offers[selected.service] = exported
+                samples[offer.service]["open_offers"][selected.service] = [
+                    offer_paragraphs.setdefault(paragraph, len(offer_paragraphs))
+                    for paragraph in panel[0].split("\n\n")
+                ]
             for name, sample in stages.items():
                 active = sample if sample.status in OPEN_STATUSES else None
                 summary = replace(profile, active_tickets=int(active is not None),
@@ -123,6 +139,8 @@ def export_cards():
     for route, panel in cards.items():
         panel["cover"] = cover_for(route, panel["text"])
     return {"cards": cards, "samples": samples, "examples": examples,
+            "open_offers": open_offers, "offer_paragraphs": list(offer_paragraphs),
+            "icon_fallbacks": {icon_id: theme.alternative_text(icon_id) for icon_id, _ in theme.NAV_ICONS.values()},
             "categories": catalog.CATEGORIES,
             "brand": {"name": catalog.PROFILE_NAME, "short_name": catalog.BRAND_NAME, "short_description": catalog.SHORT_DESCRIPTION,
                       "description": catalog.DESCRIPTION, "banner": "../assets/showcase/welcome.jpg",
@@ -216,6 +234,13 @@ function currentCard(){
  const sample=data.samples[service];
  if(route.startsWith('c:history:'))return sample.history_customer;
  if(state){
+  if(state!=='done' && route.startsWith('c:service:')){
+   const selected=route.split(':')[2];
+   if(data.open_offers[selected]){
+    const text=sample.open_offers[selected].map(index=>data.offer_paragraphs[index]).join('\n\n');
+    return {...data.open_offers[selected],text};
+   }
+  }
   if(route==='c:home')return sample.context[state].home;
   if(route==='c:profile')return sample.context[state].profile;
   if(route==='c:help')return sample.context[state].help;
@@ -259,7 +284,8 @@ function show(next){
     if(found.align?.[index])row.dataset.align=found.align[index];
     for(const item of buttons){
      const key=document.createElement('button');key.className='key';key.title=item.text;
-     const label=document.createElement('span');label.textContent=item.text;key.append(label);
+     const fallback=data.icon_fallbacks[item.icon_custom_emoji_id];
+     const label=document.createElement('span');label.textContent=fallback?fallback+' '+item.text:item.text;key.append(label);
      key.dataset.callback=item.callback_data||'';
      if(['primary','success','danger'].includes(item.style))key.dataset.style=item.style;
      key.onclick=()=>navigate(item.callback_data);row.append(key);
