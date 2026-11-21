@@ -34,7 +34,7 @@ def test_complete_owner_price_list_and_telegram_limits():
     assert "binance" not in EXPECTED_PRICES
     assert catalog.offer("eldorado", "standard").price_from
     assert not catalog.offer("localbitcoins", "standard").available
-    cards = [screens.catalog_card(), screens.sections_card(), ui.home("Эврикус", None)]
+    cards = [screens.catalog_card(), ui.home("Эврикус", None)]
     cards += [screens.category_card(code, page) for code in catalog.CATEGORIES
               for page in range((len(screens.category_offers(code)) - 1) // screens.CATALOG_PAGE_SIZE + 1)]
     cards += [screens.offer_card(o) for o in catalog.OFFERS.values()]
@@ -74,45 +74,45 @@ async def test_each_category_exposes_services_and_current_prices(env, category):
     assert seen == [offer.service for offer in offers]
 
 
-def test_catalog_has_two_column_sections_and_no_wholesale_entrypoints():
-    text, keyboard = screens.sections_card()
+def test_catalog_opens_with_the_six_sections_and_home_only():
+    text, keyboard = screens.catalog_card()
     section_rows = [row for row in keyboard.inline_keyboard
                     if str(row[0].callback_data).startswith("c:category:")]
     assert len(section_rows) == 3
     assert all(len(row) == 2 for row in section_rows)
-    assert {button.callback_data for row in section_rows for button in row} == {
-        f"c:category:{category}" for category in catalog.CATEGORIES
-    }
-    assert "опт" not in text.lower()
-    assert all(button.callback_data != "c:wholesale" for row in keyboard.inline_keyboard for button in row)
-
-
-def test_compact_catalog_and_page_controls_fit_the_narrow_rich_panel():
-    _, keyboard = screens.catalog_card()
-    catalog_rows = [[b.callback_data for b in row] for _, row in rich.layout_rows(keyboard.inline_keyboard)]
-    assert catalog_rows == [
-        ["c:service:claude", "c:service:bybit"], ["c:service:alipay"], ["c:sections"], ["c:home"],
+    assert [button.callback_data for row in keyboard.inline_keyboard for button in row] == [
+        *(f"c:category:{category}" for category in catalog.CATEGORIES), "c:home",
     ]
+    assert all(word not in text.casefold() for word in ("популяр", "claude", "bybit", "alipay", "опт"))
+
+
+def test_category_page_controls_fit_the_narrow_rich_panel():
     _, keyboard = screens.category_card("exchanges", 1)
     page_rows = [[b.callback_data for b in row] for _, row in rich.layout_rows(keyboard.inline_keyboard)]
     assert page_rows[-2] == ["c:category:exchanges:0", "c:category:exchanges:2"]
-    assert page_rows[-1] == ["c:sections"]
+    assert page_rows[-1] == ["c:catalog"]
     assert sum(data.startswith("c:service:") for row in page_rows for data in row) == 5
 
 
 @pytest.mark.parametrize("prefix,uid", [("c", CLIENT), ("p", ADMIN)])
-async def test_sections_keep_the_catalog_cover_and_return_to_popular_offers(env, prefix, uid):
+async def test_old_sections_callback_opens_same_catalog_and_back_navigation(env, prefix, uid):
     from verifydesk.media import cover_for
 
     await env.callback(uid, f"{prefix}:catalog")
-    assert f"{prefix}:sections" in callbacks(last(env, uid))
+    direct = last(env, uid)
     await env.callback(uid, f"{prefix}:sections")
-    sections = last(env, uid)
-    assert f"{prefix}:category:wallets" in callbacks(sections)
-    assert f"{prefix}:catalog" in callbacks(sections)
-    assert cover_for(f"{prefix}:sections", sections["text"]) == "catalog"
+    legacy = last(env, uid)
+    assert legacy["text"] == direct["text"]
+    assert legacy["reply_markup"] == direct["reply_markup"]
+    assert cover_for(f"{prefix}:sections", legacy["text"]) == "catalog"
+
+    assert f"{prefix}:category:wallets" in callbacks(legacy)
     await env.callback(uid, f"{prefix}:category:wallets")
-    assert f"{prefix}:sections" in callbacks(last(env, uid))
+    assert f"{prefix}:catalog" in callbacks(last(env, uid))
+    await env.callback(uid, f"{prefix}:catalog")
+    assert f"{prefix}:home" in callbacks(last(env, uid))
+    await env.callback(uid, f"{prefix}:home")
+    assert f"{prefix}:catalog" in callbacks(last(env, uid))
 
 
 @pytest.mark.parametrize("category", catalog.CATEGORIES)
@@ -270,7 +270,7 @@ async def test_rules_require_all_pages_then_explicit_agreement_and_snapshot_orde
     await env.callback(CLIENT, agree)
     state = env.store.terms_state(CLIENT)
     assert state["accepted_version"] == rules.VERSION and state["accepted_at"]
-    assert "c:sections" in callbacks(last(env, CLIENT))
+    assert "c:category:wallets" in callbacks(last(env, CLIENT))
     accepted_at = state["accepted_at"]
     await env.callback(CLIENT, agree)
     assert env.store.terms_state(CLIENT)["accepted_at"] == accepted_at
@@ -291,7 +291,7 @@ async def test_complete_rules_require_delivery_and_one_current_agreement(env):
     await env.callback(CLIENT, "c:agree_full:expired")
     assert env.store.terms_state(CLIENT)["accepted_at"] is None
     await env.callback(CLIENT, agree)
-    assert "c:sections" in callbacks(last(env, CLIENT))
+    assert "c:category:wallets" in callbacks(last(env, CLIENT))
     assert env.store.for_user(CLIENT) is None
     ticket = await order(env, service="bybit")
     snapshot = env.store.db.execute("SELECT * FROM ticket_terms WHERE ticket_id=?", (ticket.id,)).fetchone()
@@ -361,7 +361,7 @@ async def test_operator_admin_access_and_client_onboarding_modes(env):
     assert env.store.operator_mode(ADMIN) == "admin"
     await env.callback(ADMIN, "a:mode:client")
     await read_and_accept(env, ADMIN)
-    assert "c:sections" in callbacks(last(env, ADMIN))
+    assert "c:category:wallets" in callbacks(last(env, ADMIN))
 
 
 def test_full_rules_are_preserved_without_omitted_paragraphs():

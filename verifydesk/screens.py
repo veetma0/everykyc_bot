@@ -32,26 +32,11 @@ def _service_button(offer):
 
 
 def catalog_card():
-    shortcuts = []
-    lines = ["<b>Каталог услуг</b>", "", "Популярные сервисы"]
-    for code in ("claude", "bybit", "alipay"):
-        offer = catalog.offer(code, "standard")
-        title = catalog.SHORT_TITLES.get(code, offer.title)
-        lines.append(f"{escape(title)} · {catalog.offer_price(offer)}")
-        shortcuts.append(ui.action(title, f"c:service:{code}"))
-    return "\n".join(lines), ui.Keyboard([
-        *_two_columns(shortcuts),
-        [ui.action("Все разделы", "c:sections", "primary")],
-        [ui.action("‹ Главная", "c:home")],
-    ])
-
-
-def sections_card():
     return (
-        "<b>Все разделы</b>\n\nВыберите раздел каталога.",
+        "<b>Каталог услуг</b>\n\nВыберите раздел.",
         ui.Keyboard(
             _two_columns([ui.action(title, f"c:category:{code}") for code, title in catalog.CATEGORIES.items()])
-            + [[ui.action("‹ Каталог", "c:catalog")]]
+            + [[ui.action("‹ Главная", "c:home")]]
         ),
     )
 
@@ -74,7 +59,7 @@ def category_card(category, page=0):
         navigation.append(ui.action(f"{page + 2}/{pages} ›", f"c:category:{category}:{page + 1}"))
     if navigation:
         rows.append(navigation)
-    rows.append([ui.action("‹ Разделы", "c:sections")])
+    rows.append([ui.action("‹ Каталог", "c:catalog")])
     return "\n".join(lines), ui.Keyboard(rows)
 
 

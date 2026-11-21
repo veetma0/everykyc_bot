@@ -36,7 +36,7 @@ async def test_classic_before_consent_requires_all_readable_pages(env, rich_star
         assert "rich_message" not in last_wire(env)[1]
     await env.callback(CLIENT, f"c:agree:{rules.VERSION}")
     assert env.store.terms_state(CLIENT)["accepted_version"] == rules.VERSION
-    assert "c:sections" in callbacks(last(env, CLIENT))
+    assert "c:category:wallets" in callbacks(last(env, CLIENT))
     assert "rich_message" not in last_wire(env)[1]
     await env.callback(CLIENT, "c:rules")
     assert "c:home" in callbacks(last(env, CLIENT))

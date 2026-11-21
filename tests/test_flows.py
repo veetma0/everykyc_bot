@@ -19,7 +19,7 @@ async def test_legacy_customer_operator_flow(env):
     assert "EVERYKYC" in texts(env, CLIENT)[-1]
     assert "c:catalog" in callbacks(last(env, CLIENT))
     await env.callback(CLIENT, "c:prepare")
-    assert "c:sections" in callbacks(last(env, CLIENT))
+    assert "c:category:wallets" in callbacks(last(env, CLIENT))
     assert "c:create" not in callbacks(last(env, CLIENT))
     ticket = await create(env)
     ticket = legacy_ticket(env.store, ticket)
@@ -49,8 +49,8 @@ async def test_plain_text_requires_consent_and_ticket(env):
     await env.message(CLIENT, "Нужна помощь")
     assert env.store.for_user(CLIENT) is None
     assert "не отправлено" in texts(env, CLIENT)[-1]
-    assert "c:sections" in callbacks(last(env, CLIENT))
-    assert "c:service:claude" in callbacks(last(env, CLIENT))
+    assert "c:category:wallets" in callbacks(last(env, CLIENT))
+    assert "c:service:claude" not in callbacks(last(env, CLIENT))
     assert not any("Нужна помощь" in text for text in texts(env, ADMIN))
 
 

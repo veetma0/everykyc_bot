@@ -58,7 +58,7 @@ async def test_active_order_is_reachable_from_home_without_new_order(env):
     assert ticket_count(env) == 1
 
 
-async def test_all_home_entry_points_keep_individual_service_buttons_in_catalog(env):
+async def test_all_home_entry_points_omit_individual_service_buttons(env):
     def check_home(uid):
         rows = last(env, uid)["reply_markup"]["inline_keyboard"]
         buttons = [button for row in rows for button in row]
@@ -169,16 +169,21 @@ async def test_active_chat_buttons_and_details_are_confined_to_home_while_browsi
 
 
 @pytest.mark.parametrize("service", ["claude", "bybit", "alipay"])
-async def test_catalog_shortcut_opens_priced_offer_without_creating_order(env, service):
+async def test_services_appear_in_their_category_only_and_open_priced_offers(env, service):
     from verifydesk import catalog
 
-    await env.message(CLIENT, "/start")
-    await env.callback(CLIENT, "c:catalog")
+    await env.message(CLIENT, "/services")
+    index = last(env, CLIENT)
     selected = catalog.offer(service, "standard")
-    shortcut = next(button for row in last(env, CLIENT)["reply_markup"]["inline_keyboard"] for button in row
-                    if button["callback_data"] == f"c:service:{service}")
-    assert f'{shortcut["text"]} · {catalog.offer_price(selected)}' in last(env, CLIENT)["text"]
-    await env.callback(CLIENT, shortcut["callback_data"])
+    category = f"c:category:{selected.category}"
+    action = f"c:service:{service}"
+    assert category in callbacks(index)
+    assert action not in callbacks(index)
+    await env.callback(CLIENT, category)
+    category_button = next(button for row in last(env, CLIENT)["reply_markup"]["inline_keyboard"]
+                           for button in row if button["callback_data"] == action)
+    assert catalog.offer_price(selected) in category_button["text"]
+    await env.callback(CLIENT, action)
     card = last(env, CLIENT)
     assert selected.title in card["text"]
     assert catalog.offer_price(selected) in card["text"]
@@ -187,7 +192,7 @@ async def test_catalog_shortcut_opens_priced_offer_without_creating_order(env, s
     assert not sent(env, ADMIN)
     assert "c:catalog" in callbacks(card)
     await env.callback(CLIENT, "c:catalog")
-    assert shortcut["callback_data"] in callbacks(last(env, CLIENT))
+    assert callbacks(last(env, CLIENT)) == callbacks(index)
 
 
 @pytest.mark.parametrize("entry", ["c:home", "c:catalog", "c:profile", "c:help"])
@@ -202,7 +207,7 @@ async def test_stale_wholesale_button_cannot_create_or_notify(env):
     for _ in range(2):
         await env.callback(CLIENT, "c:wholesale")
         assert ticket_count(env) == 0
-        assert "c:sections" in callbacks(last(env, CLIENT))
+        assert "c:category:wallets" in callbacks(last(env, CLIENT))
         assert "c:wholesale" not in callbacks(last(env, CLIENT))
     assert not sent(env, ADMIN)
 

@@ -328,9 +328,7 @@ async def test_new_customer_entries_reach_catalog_without_legacy_unpriced_order(
     if "c:catalog" in data:
         await env.callback(CLIENT, "c:catalog")
         data = callbacks(last(env, CLIENT))
-    assert "c:sections" in data
-    await env.callback(CLIENT, "c:sections")
-    assert "c:category:other" in callbacks(last(env, CLIENT))
+    assert "c:category:other" in data
     await env.callback(CLIENT, "c:category:other")
     assert "c:service:claude" in callbacks(last(env, CLIENT))
     await env.callback(CLIENT, "c:service:claude")

@@ -780,10 +780,8 @@ class Desk:
         elif verb == "home":
             card = ui.home(self.config.title, None) if preview else self.customer_home(uid)
             await self.screen(update, context, *card, route="c:home")
-        elif verb == "catalog":
+        elif verb in {"catalog", "sections"}:
             await self.screen(update, context, *screens.catalog_card(), route="c:catalog")
-        elif verb == "sections":
-            await self.screen(update, context, *screens.sections_card(), route="c:sections")
         elif verb == "category":
             page = int(parts[3]) if len(parts) > 3 else 0
             await self.screen(update, context, *screens.category_card(parts[2], page))

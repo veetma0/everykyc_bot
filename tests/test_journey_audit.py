@@ -56,7 +56,6 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
 
     env.require_terms = True
     await read_and_accept(env)
-    await press(env, CLIENT, "c:sections")
     await press(env, CLIENT, "c:category:other")
     await press(env, CLIENT, "c:service:claude")
     await press(env, CLIENT, "c:order:claude:standard")
@@ -114,7 +113,6 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
     assert (profile.total_tickets, profile.active_tickets, profile.resolved_tickets) == (1, 0, 1)
     await press(env, CLIENT, f"c:view:{ticket.id}")
     await press(env, CLIENT, "c:catalog")
-    await press(env, CLIENT, "c:sections")
     await press(env, CLIENT, "c:category:wallets")
     await press(env, CLIENT, "c:service:alipay")
     await press(env, CLIENT, "c:order:alipay:standard")
@@ -282,7 +280,6 @@ async def test_every_generated_callback_stays_within_telegram_size_limit(env):
 async def test_legacy_create_button_leads_to_current_offers_before_order_creation(env):
     await env.callback(CLIENT, "c:create")
     assert env.store.for_user(CLIENT) is None
-    await press(env, CLIENT, "c:sections")
     await press(env, CLIENT, "c:category:other")
     await press(env, CLIENT, "c:service:claude")
     assert "c:order:claude:standard" in callbacks(last(env, CLIENT))

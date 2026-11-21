@@ -36,7 +36,6 @@ def sample_orders_card(ticket=None):
 def export_cards():
     cards = {"c:home": card(ui.home(catalog.BRAND_NAME, None), customer=True),
              "c:catalog": card(screens.catalog_card(), customer=True),
-             "c:sections": card(screens.sections_card(), customer=True),
              "c:help": card(screens.help_card(), customer=True),
              "c:privacy": card((ui.PRIVACY, ui.Keyboard([[ui.action("Главная", "c:home")]])), customer=True)}
     for category in catalog.CATEGORIES:
@@ -174,7 +173,7 @@ footer{padding:0 28px 25px;color:#53636e;font-size:12px;max-width:1500px;margin:
 </style></head><body>
 <header><h1 id="preview-title"></h1><p class="note">Предпросмотр Telegram с демонстрационными заказами.</p>
 <nav class="views" aria-label="Вид макета"><button class="view" id="view-chat" aria-pressed="true">Интерфейс бота</button><button class="view" id="view-brand" aria-pressed="false">Профиль и баннер</button></nav>
-<div class="controls"><label>Открыть экран<select id="screen"><option value="c:home">Главная</option><option value="c:catalog">Каталог</option><option value="c:sections">Все разделы</option><option value="c:help">Помощь</option><option value="c:profile">История</option><option value="c:rules">Правила</option><option value="c:privacy">Мои данные</option></select></label>
+<div class="controls"><label>Открыть экран<select id="screen"><option value="c:home">Главная</option><option value="c:catalog">Каталог</option><option value="c:help">Помощь</option><option value="c:profile">История</option><option value="c:rules">Правила</option><option value="c:privacy">Мои данные</option></select></label>
 <label>Пример заказа<select id="state"><option value="">Без заказа</option><option value="new">Ожидает оператора</option><option value="payment">Ожидает оплаты</option><option value="rejected">Нужен другой чек</option><option value="review">Проверяем оплату</option><option value="working">В работе</option><option value="done">Заказ выполнен</option></select></label><label>Сервис в примере<select id="service"></select></label><label>Другие экраны · пример Bybit<select id="example"><option value="">Выбрать экран</option></select></label><button class="reset" id="reset">Начать сначала</button></div>
 <p class="live-note" id="notice" role="status">Нажимайте кнопки в любом окне. Один экран показан в разных темах и размерах.</p></header>
 <main class="frames" id="frames"></main><footer>Ширина 320 и 390 px · светлая и тёмная темы. Оформление приближено к Telegram для проверки длины строк; реальные шрифты, цвета и расположение блоков зависят от устройства. Фирменные эмодзи бирж проверяются в Telegram отдельно. Примеры заказов и переписки работают локально.</footer>
@@ -184,7 +183,7 @@ const data=JSON.parse(document.querySelector('#data').textContent);let route='c:
 const notice=document.querySelector('#notice'),screen=document.querySelector('#screen'),stateSelect=document.querySelector('#state'),serviceSelect=document.querySelector('#service'),exampleSelect=document.querySelector('#example');
 document.title=data.brand.short_name+' · предпросмотр Telegram';
 document.querySelector('#preview-title').textContent=data.brand.name;
-let previousOption=screen.querySelector('option[value="c:sections"]');
+let previousOption=screen.querySelector('option[value="c:catalog"]');
 for(const [code,title] of Object.entries(data.categories)){
  const option=document.createElement('option');
  option.value='c:category:'+code;
@@ -282,7 +281,9 @@ function navigate(next){notice.textContent='Нажимайте кнопки в �
  }
  const adminRoutes={'a:home':'admin_home','a:more':'admin_more','a:mode:admin':'admin_home'};if(adminRoutes[next]){show('x:'+adminRoutes[next]);return}if(next.startsWith('a:view:')||next.startsWith('a:next')){show('x:admin_ticket:new');return}if(next.startsWith('a:client:')){show('x:admin_profile');return}if(next.startsWith('a:details:')){show('x:admin_details:working');return}if(next.startsWith('a:status:')){show('x:admin_status:working');return}if(data.cards[next]||next==='c:current'||next.startsWith('c:view:')||next.startsWith('c:chat:')){if(next.startsWith('c:view:')&&!state)state='new';show(next);return}notice.textContent='Это действие не выполняется в локальном макете. Нужный пример состояния можно открыть в списке «Другие экраны».';}
 document.querySelector('#view-chat').onclick=()=>navigate('c:home');document.querySelector('#view-brand').onclick=()=>{show('b:profile');notice.textContent='Пример оформления профиля перед первым запуском. Баннер и тексты показаны из файлов проекта; это не подтверждение публикации.'};screen.onchange=()=>navigate(screen.value);exampleSelect.onchange=()=>{if(exampleSelect.value){service='bybit';show(exampleSelect.value);notice.textContent='Локальный пример Bybit: данные вымышлены, действий в Telegram нет.'}};stateSelect.onchange=()=>{state=stateSelect.value;notice.textContent=state?'Показан только образец состояния заказа. Реальных заказов и платежей нет.':'Показан интерфейс без активного заказа.';show(state?'c:current':'c:home')};serviceSelect.onchange=()=>{service=serviceSelect.value;show(state?'c:current':`c:service:${service}`)};document.querySelector('#reset').onclick=()=>{state='';service='bybit';navigate('c:home')};
-const params=new URLSearchParams(location.search);if(data.samples[params.get('service')])service=params.get('service');if(['new','payment','rejected','review','working','done'].includes(params.get('state')))state=params.get('state');let initial=decodeURIComponent(location.hash.slice(1));show(initial==='b:profile'||data.cards[initial]||data.examples[initial.slice(2)]||initial.startsWith('c:history:')||(initial==='c:current'&&state)?initial:'c:home');
+const params=new URLSearchParams(location.search);if(data.samples[params.get('service')])service=params.get('service');if(['new','payment','rejected','review','working','done'].includes(params.get('state')))state=params.get('state');let initial=decodeURIComponent(location.hash.slice(1));
+if(initial==='c:sections')initial='c:catalog';
+show(initial==='b:profile'||data.cards[initial]||data.examples[initial.slice(2)]||initial.startsWith('c:history:')||(initial==='c:current'&&state)?initial:'c:home');
 </script></body></html>'''
 
 
