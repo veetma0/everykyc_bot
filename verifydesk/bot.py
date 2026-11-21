@@ -98,7 +98,7 @@ async def deliver(bot, chat_id, text, reply_markup=None, *, store=None):
             return message, "delivered"
         except BadRequest as exc:
             reason = str(exc).lower()
-            if theme.enabled() and (not use_rich or "emoji" in reason or "icon" in reason):
+            if ("emoji" in reason or "icon" in reason) and theme.has_custom_emoji(text, reply_markup):
                 theme.disable()
                 text, reply_markup = theme.without_custom_emoji(text, reply_markup)
                 continue
@@ -398,7 +398,7 @@ class Desk:
                 if source and "message is not modified" in reason:
                     message = source
                     break
-                if theme.enabled() and ("emoji" in reason or "icon" in reason):
+                if ("emoji" in reason or "icon" in reason) and theme.has_custom_emoji(text, keyboard):
                     theme.disable()
                     text, keyboard = theme.without_custom_emoji(text, keyboard)
                     continue
@@ -806,13 +806,11 @@ class Desk:
         elif verb == "category":
             page = int(parts[3]) if len(parts) > 3 else 0
             await self.screen(update, context, *screens.category_card(parts[2], page))
-        elif verb == "service":
-            await self.screen(update, context, *screens.service_card(parts[2]), route=f"c:service:{parts[2]}")
-        elif verb in {"offer", "order"} and (parts[2], parts[3]) not in catalog.OFFERS:
-            # Old region cards must show current terms and require a fresh order click.
-            await self.screen(update, context, *screens.service_card(parts[2]), route=f"c:service:{parts[2]}")
-        elif verb == "offer":
-            await self.screen(update, context, *screens.offer_card(catalog.offer(parts[2], parts[3])))
+        elif verb in {"service", "offer"} or (verb == "order" and (parts[2], parts[3]) not in catalog.OFFERS):
+            # Old region buttons show the current offer before any order can be created.
+            offer = catalog.OFFERS.get(tuple(parts[2:4])) or catalog.offer(parts[2], "standard")
+            current = None if preview else self.store.for_user(uid, active_only=True)
+            await self.screen(update, context, *screens.offer_card(offer, current), route=f"c:service:{offer.service}")
         elif verb == "order":
             selected = catalog.offer(parts[2], parts[3])
             if not selected.available:
@@ -822,19 +820,7 @@ class Desk:
                 uid, selected.service, selected.plan, None if selected.demo else selected.price_usd
             )
             if not created and (ticket.service_code, ticket.plan_code) != (selected.service, selected.plan):
-                await self.screen(
-                    update,
-                    context,
-                    f"<b>У вас уже есть активный заказ №{ticket.id:04d}</b>\n\n"
-                    f"{catalog.service_title(ticket.service_code, ticket.plan_code)} · {catalog.dollars(ticket.price_usd)}\n\n"
-                    f"Вы выбрали {escape(selected.title)}. Откройте текущий заказ кнопкой ниже и опишите новый запрос оператору. Условия текущего заказа сохранены.",
-                    ui.Keyboard(
-                        [
-                            [ui.action("📦 Открыть заказ", f"c:view:{ticket.id}", "primary")],
-                            [ui.action("Каталог услуг", "c:catalog")],
-                        ]
-                    ),
-                )
+                await self.screen(update, context, *screens.offer_card(selected, ticket), route=f"c:service:{selected.service}")
                 return
             self.store.set_customer_focus(uid, ticket.id)
             await self.screen(update, context, *ui.customer_ticket(ticket, self.config.timezone))

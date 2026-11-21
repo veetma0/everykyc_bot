@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from verifydesk import catalog, screens
+from verifydesk import catalog, screens, theme
 from verifydesk.store import Store
 
 from .conftest import ADMIN, CLIENT, OTHER
@@ -231,7 +231,9 @@ async def test_rendered_buttons_use_native_emphasis_in_both_roles(env):
             assert button.get('style') in {None, 'primary', 'success', 'danger'}
             if button.get('style') == 'danger':
                 assert button['callback_data'].startswith('c:close:')
-            assert button.get('icon_custom_emoji_id') is None
+            if button.get('icon_custom_emoji_id'):
+                assert button['callback_data'].startswith('c:')
+                assert button['icon_custom_emoji_id'] in {icon[0] for icon in theme.NAV_ICONS.values()}
     for offer in catalog.OFFERS.values():
         _, keyboard = screens.offer_card(offer)
         colored = [button for row in keyboard.inline_keyboard for button in row if button.style]

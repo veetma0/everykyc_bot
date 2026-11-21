@@ -17,7 +17,7 @@ async def payment(env):
 
 async def test_customer_can_write_directly_and_payment_is_readable_without_opening_menus(env):
     await env.message(CLIENT, "/start")
-    assert {"c:catalog", "c:profile", "c:rules", "c:help"} <= set(callbacks(last(env, CLIENT)))
+    assert {"c:catalog", "c:profile", "c:help"} == set(callbacks(last(env, CLIENT)))
     assert "c:wholesale" not in callbacks(last(env, CLIENT))
     ticket = await order(env)
     data = callbacks(last(env, CLIENT))

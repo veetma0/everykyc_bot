@@ -66,11 +66,7 @@ def category_card(category, page=0):
     return "\n".join(lines), ui.Keyboard(rows)
 
 
-def service_card(service):
-    return offer_card(catalog.offer(service, "standard"))
-
-
-def offer_card(offer):
+def offer_card(offer, current=None):
     text = f"<b>{escape(offer.title)} · Верификация</b>\n\n"
     rows = []
     if not offer.available:
@@ -83,14 +79,26 @@ def offer_card(offer):
             text += "Точная стоимость зависит от задачи.\n"
         if offer.service == "claude":
             text += "Подписка Claude оплачивается отдельно.\n"
-        text += (
-            "\nПроверку вы проходите сами на свои данные в официальном сервисе. "
-            "Оформляя заказ, подтверждаете, что аккаунт ваш.\n\n"
-            "<b>Оформление без списаний.</b>"
-        )
-        rows.append([ui.action(
-            f"Заказать · {catalog.offer_price(offer)}", f"c:order:{offer.service}:{offer.plan}", "primary",
-        )])
+        if current:
+            name = catalog.service_title(current.service_code, current.plan_code)
+            text += (
+                f"\n<b>Ваш открытый заказ №{current.id:04d}</b>\n"
+                f"{escape(name)} · {catalog.dollars(current.price_usd)}\n"
+            )
+            if (current.service_code, current.plan_code) == (offer.service, offer.plan):
+                text += "Можно продолжить переписку с оператором."
+            else:
+                text += "Другую услугу можно обсудить с оператором в этом заказе."
+            rows.append([ui.action("Открыть заказ", f"c:view:{current.id}", "primary")])
+        else:
+            text += (
+                "\nПроверку вы проходите сами на свои данные в официальном сервисе. "
+                "Оформляя заказ, подтверждаете, что аккаунт ваш.\n\n"
+                "<b>Оформление без списаний.</b>"
+            )
+            rows.append([ui.action(
+                f"Заказать · {catalog.offer_price(offer)}", f"c:order:{offer.service}:{offer.plan}", "primary",
+            )])
     rows.append([ui.action(f"‹ {catalog.CATEGORIES[offer.category]}", f"c:category:{offer.category}:{category_page(offer)}"),
                  ui.action("В каталог", "c:catalog")])
     return text, ui.Keyboard(rows)

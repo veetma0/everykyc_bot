@@ -37,8 +37,7 @@ PRIVACY = (
 
 def action(text: str, data: str, style: str | None = None):
     # Telegram owns the palette: emphasize only the next action on each screen.
-    parts = data.split(":")
-    icon = theme.service_icon(parts[2]) if len(parts) == 3 and parts[1] == "service" else None
+    icon = theme.button_icon(text, data, style)
     return Button(text, callback_data=data, icon_custom_emoji_id=icon, style=style)
 
 
@@ -65,7 +64,6 @@ def home(title: str, ticket: Ticket | None):
     rows = [
         [action("Каталог услуг", "c:catalog", "primary")],
         [action("Заказы", "c:profile"), action("Помощь", "c:help")],
-        [action("Гид", "c:guide:general"), action("Правила", "c:rules")],
     ]
     text = (
         f"<b>{escape(title)} · Помощь с верификацией</b>\n\n"
@@ -90,7 +88,7 @@ def home(title: str, ticket: Ticket | None):
         rows = [
             [action(resume, f"c:chat:{ticket.id}", "primary")],
             [action("Каталог", "c:catalog"), action("Заказы", "c:profile")],
-            [action("Помощь", "c:help"), action("Правила", "c:rules")],
+            [action("Помощь", "c:help")],
         ]
     return text, Keyboard(rows)
 

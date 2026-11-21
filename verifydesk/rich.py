@@ -7,6 +7,7 @@ from unicodedata import combining
 from telegram import InlineKeyboardMarkup, InputFile, Message
 from telegram.error import BadRequest, EndPointNotFound
 
+from . import theme
 
 def blocks(message):
     if not isinstance(message, Message):
@@ -92,7 +93,8 @@ def button_rows(keyboard):
                 raise BadRequest("Button requires a conventional inline keyboard")
             label = escape(button.text)
             if button.icon_custom_emoji_id:
-                label = f'<tg-emoji emoji-id="{escape(button.icon_custom_emoji_id)}">🔹</tg-emoji> {label}'
+                alt = theme.alternative_text(button.icon_custom_emoji_id)
+                label = f'<tg-emoji emoji-id="{escape(button.icon_custom_emoji_id)}">{alt}</tg-emoji> {label}'
             style = f' style="{escape(button.style)}"' if button.style else ""
             buttons.append(f"<tg-button {target}{style}>{label}</tg-button>")
         align = f' align="{alignment}"' if alignment else ""

@@ -18,13 +18,13 @@ def existing_discussion(env):
     return ticket
 
 
-async def test_home_groups_primary_action_navigation_and_rules(env):
+async def test_home_keeps_only_shopping_orders_and_help(env):
     await env.message(CLIENT, "/start")
     card = last(env, CLIENT)
     assert "Выберите сервис в каталоге или напишите его название в чат. Бот покажет цену и условия." in card["text"]
     rows = card["reply_markup"]["inline_keyboard"]
     assert [[button["callback_data"] for button in row] for row in rows] == [
-        ["c:catalog"], ["c:profile"], ["c:help"], ["c:guide:general", "c:rules"],
+        ["c:catalog"], ["c:profile"], ["c:help"],
     ]
     assert rows[0][0]["style"] == "primary"
     assert "Обсудить опт" not in card["text"]
@@ -62,7 +62,7 @@ async def test_all_home_entry_points_keep_individual_service_buttons_in_catalog(
         rows = last(env, uid)["reply_markup"]["inline_keyboard"]
         buttons = [button for row in rows for button in row]
         assert any(b["callback_data"].endswith(":catalog") for b in buttons)
-        assert not any(b["callback_data"].split(":")[1] in {"service", "offer", "order"} for b in buttons)
+        assert not any(b["callback_data"].split(":")[1] in {"service", "offer", "order", "guide", "rules"} for b in buttons)
         assert not any(name in b["text"].casefold() for b in buttons for name in ("claude", "bybit", "alipay"))
 
     for command in ("/start", "/menu"):
@@ -80,6 +80,36 @@ async def test_all_home_entry_points_keep_individual_service_buttons_in_catalog(
     check_home(ADMIN)
     await env.message(ADMIN, "/client")
     check_home(ADMIN)
+    existing_discussion(env)
+    await env.callback(CLIENT, "c:home")
+    check_home(CLIENT)
+    await env.callback(CLIENT, "c:help")
+    assert {"c:guide:general", "c:rules"} <= set(callbacks(last(env, CLIENT)))
+
+
+@pytest.mark.parametrize("service", ["bybit", "claude"])
+async def test_priced_offer_opens_an_existing_order_directly_without_switching_chat_on_browse(env, service):
+    ticket = await order(env, service="bybit")
+    discussion = existing_discussion(env)
+    env.store.set_customer_focus(CLIENT, discussion.id)
+    before = len(sent(env, ADMIN))
+    await env.callback(CLIENT, "c:catalog")
+    await env.callback(CLIENT, f"c:service:{service}")
+    card = last(env, CLIENT)
+    assert catalog.offer_price(catalog.offer(service, "standard")) in card["text"]
+    assert f"Ваш открытый заказ №{ticket.id:04d}" in card["text"]
+    assert "Bybit · $50" in card["text"]
+    assert callbacks(card)[0] == f"c:view:{ticket.id}"
+    assert f"c:chat:{ticket.id}" not in callbacks(card)
+    assert not any(target.startswith("c:order:") for target in callbacks(card))
+    assert env.store.customer_focus(CLIENT).id == discussion.id
+    await env.callback(CLIENT, callbacks(card)[0])
+    assert env.store.customer_focus(CLIENT).id == ticket.id
+    assert f"Заказ №{ticket.id:04d}" in last(env, CLIENT)["text"]
+    assert ticket_count(env) == 2 and len(sent(env, ADMIN)) == before
+    env.store.set_status(ticket.id, ticket.version, "cancelled", ADMIN)
+    await env.callback(CLIENT, f"c:service:{service}")
+    assert callbacks(last(env, CLIENT))[0] == f"c:order:{service}:standard"
 
 
 def test_named_offer_recognizes_displayed_names_but_not_unrelated_messages():

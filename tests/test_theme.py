@@ -56,6 +56,21 @@ async def test_ambiguous_network_failure_never_retries_themed_message(tmp_path):
     assert bot.send_message.await_count == 1
 
 
+async def test_unrelated_api_fallback_preserves_navigation_icons(tmp_path):
+    bot = SimpleNamespace(
+        do_api_request=AsyncMock(side_effect=BadRequest("Unsupported rich messages")),
+        send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)),
+    )
+    message, status = await deliver(bot, 101, *screens.catalog_card())
+    assert status == "delivered" and message.message_id == 1
+    bot.do_api_request.assert_awaited_once()
+    bot.send_message.assert_awaited_once()
+    assert any(b.icon_custom_emoji_id for row in bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard
+               for b in row)
+    theme.configure(tmp_path)
+    assert ui.action("Каталог", "c:catalog").icon_custom_emoji_id == theme.NAV_ICONS["catalog"][0]
+
+
 async def test_emoji_api_success_without_entity_does_not_enable(tmp_path):
     bot = SimpleNamespace(
         get_sticker_set=AsyncMock(
@@ -101,7 +116,7 @@ async def test_only_returned_pack_button_icons_are_enabled_and_survive_restart(t
     assert theme.service_icon("unknown") is None
     theme.configure(tmp_path)
     assert theme.service_icon("bybit") == bybit
-    assert ui.action("Услуги", "c:catalog", "primary").icon_custom_emoji_id is None
+    assert ui.action("Услуги", "c:catalog", "primary").icon_custom_emoji_id == theme.NAV_ICONS["catalog"][0]
     assert ui.action("Услуги", "c:catalog", "primary").style == "primary"
 
 
