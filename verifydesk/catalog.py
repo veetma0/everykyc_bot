@@ -18,12 +18,12 @@ class Offer:
 
 
 CATEGORIES = {
-    "exchanges": "📈 Биржи",
-    "marketplaces": "🛒 Маркетплейсы",
-    "wallets": "👛 Кошельки",
-    "telegram": "✈️ Telegram и боты",
-    "casinos": "🎰 Казино",
-    "other": "✨ Прочее",
+    "exchanges": "Биржи",
+    "marketplaces": "Маркетплейсы",
+    "wallets": "Кошельки",
+    "telegram": "Telegram и боты",
+    "casinos": "Казино",
+    "other": "Другие сервисы",
 }
 
 # Prices supplied by the owner, including the requested $20 increase.
@@ -74,7 +74,7 @@ _SERVICE_ROWS = {
 OFFERS = {
     (code, "standard"): Offer(
         code, "standard", title,
-        "Поможем разобраться в шагах и ошибках проверки вашего аккаунта.",
+        "Оператор подскажет, как пройти проверку вашего аккаунта, и разберёт текст ошибки.",
         f"{price:.2f}", category=category, price_from=code == "eldorado",
         available=code != "localbitcoins",
     )
@@ -167,13 +167,12 @@ NETWORK_BY_CODE = {network.code: network for network in NETWORKS}
 NETWORK_GROUPS = {"usdt": "USD₮ · прямой выпуск", "usdt0": "USDT0", "bridged": "Другие версии токена"}
 
 BRAND_NAME = "EVERYKYC"
-PROFILE_NAME = "EVERYKYC · KYC и верификация"
-SHORT_DESCRIPTION = "Помощь с KYC и верификацией: Claude, Bybit, Alipay и другие сервисы. Заказ и оператор — в одном чате."
+PROFILE_NAME = "KYC и верификация · EVERYKYC"
+SHORT_DESCRIPTION = "Помощь с верификацией аккаунта в Claude, Bybit, Alipay и других сервисах. Цены и связь с оператором в Telegram."
 DESCRIPTION = (
-    "Помощь с KYC и верификацией вашего аккаунта.\n\n"
-    "Claude, Bybit, Alipay и другие сервисы — выберите в каталоге. "
-    "Цена, заказ и переписка с оператором здесь.\n\n"
-    "Проверку вы проходите самостоятельно на свои данные. "
-    "Географию и условия уточнит оператор. Решение принимает платформа.\n\n"
-    "Независимый сервис сопровождения. Нажмите «Начать»."
+    "Поможем разобраться с проверкой личности (KYC) в вашем аккаунте.\n\n"
+    "Выберите Claude, Bybit, Alipay или другой сервис в каталоге. "
+    "Стоимость указана в карточке. Оператор уточнит условия для вашей страны и поможет с вопросами.\n\n"
+    "Вы проходите проверку сами на официальной площадке. Решение принимает платформа.\n\n"
+    "Нажмите «Начать», чтобы открыть EVERYKYC."
 )

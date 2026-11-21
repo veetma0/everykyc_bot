@@ -9,10 +9,6 @@ from .store import OPEN_STATUSES, ticket_status
 
 
 CATALOG_PAGE_SIZE = 8
-CATEGORY_BUTTON_TITLES = {
-    "exchanges": "Биржи", "marketplaces": "Маркетплейсы", "wallets": "Кошельки",
-    "telegram": "Telegram", "casinos": "Казино", "other": "AI и сервисы",
-}
 
 
 def _two_columns(buttons):
@@ -30,21 +26,21 @@ def category_page(offer):
 
 def _service_button(offer):
     # Short names keep both columns readable on narrow Telegram clients.
-    title = {"fragment": "Fragment", "telegram_wallet": "Wallet",
+    title = {"claude": "Claude", "fragment": "Fragment", "telegram_wallet": "Wallet",
              "dragon_money": "Dragon M."}.get(offer.service, offer.title)
     label = f"{title} · {catalog.offer_price(offer)}" if offer.available else f"⛔ {title}"
     return ui.action(label, f"c:service:{offer.service}")
 
 
 def catalog_card():
+    shortcuts = [_service_button(catalog.offer(code, "standard")) for code in ("claude", "bybit", "alipay")]
     return (
         "<b>Каталог услуг</b>\n\n"
-        "Выберите категорию.\n"
-        "Цена сопровождения — на кнопке сервиса.",
+        "Откройте раздел, чтобы сравнить цены. Claude, Bybit и Alipay можно выбрать сразу.",
         ui.Keyboard(
-            _two_columns([ui.action(CATEGORY_BUTTON_TITLES[code], f"c:category:{code}")
-                          for code in catalog.CATEGORIES])
-            + [[ui.action("Мои заказы", "c:profile"), ui.action("‹ Главная", "c:home")]]
+            [shortcuts]
+            + _two_columns([ui.action(title, f"c:category:{code}") for code, title in catalog.CATEGORIES.items()])
+            + [[ui.action("‹ Главная", "c:home"), ui.action("Мои заказы", "c:profile")]]
         ),
     )
 
@@ -55,11 +51,10 @@ def category_card(category, page=0):
     pages = max(1, (len(offers) + CATALOG_PAGE_SIZE - 1) // CATALOG_PAGE_SIZE)
     page = max(0, min(page, pages - 1))
     start = page * CATALOG_PAGE_SIZE
-    lines = [f"<b>{title}</b>"]
+    lines = [f"<b>Каталог · {title}</b>"]
     if pages > 1:
-        lines.append(f"{page + 1} / {pages} · {len(offers)} сервисов")
-    lines += ["", "Выберите сервис — откроется карточка с условиями.",
-              "Доступность для вашей страны уточнит оператор."]
+        lines.append(f"Сервисы {start + 1}–{min(start + CATALOG_PAGE_SIZE, len(offers))} из {len(offers)}")
+    lines += ["", "На кнопке — стоимость сопровождения. Доступность для вашей страны уточнит оператор."]
     rows = _two_columns([_service_button(offer) for offer in offers[start:start + CATALOG_PAGE_SIZE]])
     navigation = []
     if page:
@@ -77,13 +72,13 @@ def service_card(service):
 
 
 def offer_card(offer):
-    text = f"<b>{escape(offer.title)}</b>\n"
+    text = f"<b>{escape(offer.title)} · Верификация</b>\n\n"
     rows = []
     if not offer.available:
-        text += "\n⛔ Сервис прекратил работу. Новые заказы на верификацию не принимаются."
+        text += "Сервис прекратил работу. Открыть новый заказ на верификацию здесь уже нельзя."
     else:
-        text += f"<b>{catalog.offer_price(offer)}</b> · сопровождение KYC\n\n"
         text += f"{escape(offer.detail)}\n\n"
+        text += f"<b>Стоимость сопровождения · {catalog.offer_price(offer)}</b>\n"
         text += "Доступность для вашей страны и условия уточнит оператор до оплаты.\n"
         if offer.price_from:
             text += "Точная стоимость зависит от задачи.\n"
@@ -92,36 +87,35 @@ def offer_card(offer):
         text += (
             "\nПроверку вы проходите сами на свои данные в официальном сервисе. "
             "Оформляя заказ, подтверждаете, что аккаунт ваш.\n\n"
-            "<b>Создание заказа без списаний.</b> Затем напишите вопрос в этот чат."
+            "<b>Оформление без списаний.</b>"
         )
         rows.append([ui.action(
             f"Оформить заказ · {catalog.offer_price(offer)}", f"c:order:{offer.service}:{offer.plan}", "primary",
         )])
-    rows.append([ui.action("‹ К списку", f"c:category:{offer.category}:{category_page(offer)}"),
-                 ui.action("Главная", "c:home")])
+    rows.append([ui.action(f"‹ {catalog.CATEGORIES[offer.category]}", f"c:category:{offer.category}:{category_page(offer)}"),
+                 ui.action("В каталог", "c:catalog")])
     return text, ui.Keyboard(rows)
 
 
 def guide(service="general"):
     if service != "general" and (service, "standard") not in catalog.OFFERS:
         raise ValueError("Service unavailable")
-    title = "Как оформить заказ" if service == "general" else catalog.service_title(service, "standard")
+    title = "Как это работает" if service == "general" else f"{catalog.service_title(service, 'standard')} · Следующие шаги"
     steps = (
-        "1. Выберите услугу, оформите заказ и напишите вопрос в этот чат.\n\n"
-        "2. Оператор уточнит страну и условия, затем отправит реквизиты.\n\n"
-        "3. После оплаты пришлите сюда чек — фото, файл или ссылку. Оператор проверит его и подтвердит оплату.\n\n"
-        "4. Следуйте подсказкам оператора. Вся переписка останется здесь."
+        "<b>Выберите сервис.</b> Узнайте цену в карточке, оформите заказ и напишите свой вопрос.\n\n"
+        "<b>Согласуйте условия.</b> Оператор уточнит вашу страну и задачу. "
+        "После согласования он отправит реквизиты в этот чат.\n\n"
+        "<b>Получите помощь.</b> Пришлите чек после оплаты. Когда оператор подтвердит его, он подскажет следующий шаг."
         if service == "general" else
-        "1. Дождитесь указаний оператора по вашему вопросу.\n\n"
-        "2. Откройте проверку в своём аккаунте на официальном сайте или в приложении сервиса.\n\n"
-        "3. Если появилась ошибка, пришлите её текст в этот чат без личных данных."
+        "Откройте раздел проверки личности в своём аккаунте и следуйте подсказкам оператора.\n\n"
+        "Если возникла ошибка, пришлите её текст в этот чат без личных данных."
     )
     return (
-        f"<b>{escape(title)} · инструкция</b>\n\n"
+        f"<b>{escape(title)}</b>\n\n"
         f"{steps}\n\n"
-        "🔒 Проверку проходите самостоятельно на свои данные в официальном сервисе. "
+        "Проверку проходите самостоятельно на свои данные в официальном сервисе. "
         "Ссылку KYC, документы, селфи, пароли и коды входа сюда не отправляйте."
-        + ("\n\n💡 Подписка Claude оплачивается отдельно." if service == "claude" else "")
+        + ("\n\nПодписка Claude оплачивается отдельно." if service == "claude" else "")
     )
 
 
@@ -139,16 +133,16 @@ def help_card(current=None):
         rows.append([ui.action("Написать по заказу", "c:current", "primary")])
     else:
         rows.append([ui.action("Выбрать услугу", "c:catalog", "primary")])
-    rows += [[ui.action("Правила", "c:rules"), ui.action("Мои данные", "c:privacy")],
-             [ui.action("Инструкция", "c:guide:general"), ui.action("Главная", "c:home")]]
+    rows += [[ui.action("Как это работает", "c:guide:general"), ui.action("Мои данные", "c:privacy")],
+             [ui.action("‹ Главная", "c:home"), ui.action("Правила", "c:rules")]]
     return (
         "<b>Помощь</b>\n\n"
-        "<b>Связь с оператором</b>\n"
-        "Откройте заказ и пишите прямо в этот чат. Ответ придёт сюда.\n\n"
-        "<b>Условия и оплата</b>\n"
-        "Сначала оператор уточнит страну и задачу. После согласования отправит реквизиты.\n\n"
-        "<b>Верификация</b>\n"
-        "Проверку проходите вы. Документы, селфи и коды вводите только в официальном сервисе.",
+        "<b>Как связаться с оператором?</b>\n"
+        "Выберите услугу и оформите заказ. Если заказ уже открыт, просто напишите сюда.\n\n"
+        "<b>Когда платить?</b>\n"
+        "Оператор пришлёт реквизиты, когда вы согласуете задачу, цену и условия.\n\n"
+        "<b>Куда отправлять документы?</b>\n"
+        "Загружайте их только на официальной странице проверки аккаунта. Для разбора ошибки достаточно её текста.",
         ui.Keyboard(rows),
     )
 
@@ -168,8 +162,8 @@ def profile_card(profile, current, timezone, admin=False, has_history=None):
             rows.append([ui.action("Продолжить заказ", f"c:view:{current.id}", "primary")])
         else:
             text += (
-                "\n\nАктивных заказов сейчас нет.\nПереписка и детали — в истории заказов."
-                if has_history else "\n\nПока нет заказов.\nВыберите сервис — здесь появятся статус и переписка."
+                "\n\nАктивных заказов нет. Предыдущие заказы и переписку можно открыть в истории."
+                if has_history else "\n\nПока нет заказов. Выберите сервис в каталоге. После оформления здесь появятся статус и переписка."
             )
             rows.append([ui.action("Выбрать услугу", "c:catalog", "primary")])
         if has_history:

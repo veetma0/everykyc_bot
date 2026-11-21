@@ -1,5 +1,6 @@
 import json
 from itertools import count
+from hashlib import sha256
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +27,7 @@ class FakeTelegram(BaseRequest):
         self.fail_chat = None
         self.fail_error = None
         self.webhook = False
+        self.messages = {}
 
     async def initialize(self):
         pass
@@ -55,7 +57,7 @@ class FakeTelegram(BaseRequest):
                 "has_custom_certificate": False,
                 "pending_update_count": 0,
             }
-        elif name in {"sendMessage", "editMessageText", "sendPhoto", "sendDocument"}:
+        elif name in {"sendMessage", "editMessageText", "sendPhoto", "sendDocument", "editMessageMedia", "editMessageCaption"}:
             if self.fail_chat == params["chat_id"] and self.fail_error:
                 raise self.fail_error
             result = {
@@ -63,10 +65,30 @@ class FakeTelegram(BaseRequest):
                 "date": 1700000000,
                 "chat": {"id": params["chat_id"], "type": "private", "first_name": "Test"},
                 "from": BOT_USER,
-                "text": params.get("text", params.get("caption", "")),
+
             }
+            if name in {"sendMessage", "editMessageText"}:
+                result["text"] = params["text"]
+            elif name == "sendDocument":
+                result["caption"] = params.get("caption", "")
+                result["document"] = {"file_id": params.get("document", "doc"), "file_unique_id": "doc"}
+            else:
+                media = params.get("media", {})
+                if name == "editMessageCaption":
+                    result["photo"] = self.messages[(params["chat_id"], result["message_id"])]["photo"]
+                else:
+                    files = request_data.multipart_data
+                    if files:
+                        content = next(iter(files.values()))[1]
+                        file_id = "photo-" + sha256(content).hexdigest()[:12]
+                    else:
+                        file_id = media.get("media") or params["photo"]
+                    result["photo"] = [{"file_id": file_id, "file_unique_id": "unique-" + file_id,
+                                        "width": 1280, "height": 720}]
+                result["caption"] = media.get("caption", params.get("caption", ""))
             if "inline_keyboard" in params.get("reply_markup", {}):
                 result["reply_markup"] = params["reply_markup"]
+            self.messages[(params["chat_id"], result["message_id"])] = result
         else:
             result = True
         return 200, json.dumps({"ok": True, "result": result}).encode()
@@ -154,7 +176,7 @@ async def env(store, tmp_path):
                     "from": {"id": uid, "is_bot": False, "first_name": f"Клиент {uid}"},
                     "chat_instance": "test",
                     "data": data,
-                    "message": {
+                    "message": request.messages.get((uid, card)) or {
                         "message_id": card,
                         "date": 1700000000,
                         "from": BOT_USER,

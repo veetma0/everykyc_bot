@@ -12,11 +12,17 @@ from .payment_helpers import legacy_ticket
 
 
 def sent(env, uid=None):
-    return [
-        params
-        for method, params in env.request.calls
-        if method in {"sendMessage", "editMessageText"} and (uid is None or params["chat_id"] == uid)
-    ]
+    messages = []
+    for method, params in env.request.calls:
+        if uid is not None and params.get("chat_id") != uid:
+            continue
+        if method in {"sendMessage", "editMessageText"}:
+            messages.append(params)
+        elif method in {"editMessageMedia", "editMessageCaption"} or (
+            method == "sendPhoto" and not isinstance(params.get("photo"), str)
+        ) or (method == "sendPhoto" and params["photo"].startswith("photo-")):
+            messages.append({**params, "text": params.get("media", {}).get("caption", params.get("caption", ""))})
+    return messages
 
 
 def last(env, uid):

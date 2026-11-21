@@ -62,29 +62,23 @@ def conversation_keyboard(tickets, selected_id=None):
 
 
 def home(title: str, ticket: Ticket | None):
-    def shortcut(code, label):
-        return action(f"{label} · {catalog.offer_price(catalog.offer(code, 'standard'))}", f"c:service:{code}")
-
     rows = [
-        [action("Открыть каталог", "c:catalog", "primary")],
-        [shortcut("claude", "Claude"), shortcut("bybit", "Bybit")],
-        [shortcut("alipay", "Alipay"), action("Как это работает", "c:guide:general")],
+        [action("Каталог услуг", "c:catalog", "primary")],
         [action("Мои заказы", "c:profile"), action("Помощь", "c:help")],
-        [action("Правила сервиса", "c:rules")],
+        [action("Как это работает", "c:guide:general"), action("Правила", "c:rules")],
     ]
     text = (
-        f"<b>{escape(title)}</b>\n"
-        "KYC и верификация вашего аккаунта.\n\n"
-        "Выберите сервис → узнайте условия → получите помощь.\n"
-        "Заказ и ответы оператора останутся в этом чате."
+        f"<b>{escape(title)} · Помощь с верификацией</b>\n\n"
+        "Застряли на проверке личности? Выберите свой сервис в каталоге. "
+        "В карточке увидите цену, а после оформления сможете написать оператору прямо здесь."
     )
     if ticket and ticket.status in OPEN_STATUSES:
         text = (
-            f"<b>{escape(title)}</b>\n\n"
+            f"<b>{escape(title)} · Ваш заказ</b>\n\n"
             f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
             f" · {catalog.dollars(ticket.price_usd)}\n"
             f"Заказ №{ticket.id:04d} · {ticket_status(ticket)}\n\n"
-            "Откройте заказ, чтобы увидеть следующий шаг и написать оператору."
+            "Откройте заказ, чтобы продолжить переписку с оператором."
         )
         rows = [
             [action("Продолжить заказ", f"c:chat:{ticket.id}", "primary")],
@@ -120,8 +114,8 @@ def customer_ticket(ticket: Ticket, timezone: str):
     if ticket.status == "new" and ticket.payment_stage == "awaiting_payment":
         return payment_request(ticket)
     hints = {
-        "new": "Оператор уточнит вашу страну и условия, затем отправит реквизиты.\n"
-               "Напишите, с чем нужна помощь, прямо в этот чат.",
+        "new": "Напишите прямо в этот чат, на каком шаге возник вопрос. Если появилась ошибка, пришлите её текст.\n\n"
+               "Оператор уточнит вашу страну и условия до оплаты.",
         "in_progress": "Ожидайте сообщения от оператора.\n"
                        "Он подскажет следующий шаг самостоятельной проверки.\n"
                        "🔒 Ссылку KYC, документы и коды входа сюда не отправляйте.",

@@ -1,16 +1,12 @@
 from telegram.error import Forbidden, TimedOut
 
 from .conftest import ADMIN, CLIENT, OTHER
-from .test_upgrade import callbacks, last
+from .test_upgrade import callbacks, last, sent
 from .payment_helpers import legacy_ticket
 
 
 def texts(env, chat=None):
-    return [
-        params["text"]
-        for method, params in env.request.calls
-        if method in {"sendMessage", "editMessageText"} and (chat is None or params["chat_id"] == chat)
-    ]
+    return [params["text"] for params in sent(env, chat)]
 
 
 async def create(env, uid=CLIENT):
@@ -296,7 +292,7 @@ async def test_emoji_history_fits_telegram_limit_and_opens_full_message(env):
     from verifydesk.ui import text_units
 
     assert text_units(texts(env, CLIENT)[-1]) < 4096
-    markup = env.request.calls[-1][1]["reply_markup"]
+    markup = last(env, CLIENT)["reply_markup"]
     assert (
         sum(
             ":message:" in button.get("callback_data", "")

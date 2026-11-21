@@ -67,7 +67,7 @@ async def test_rejected_icon_retries_same_card_without_sending_new_message(env, 
     async def reject_icons(url, method, request_data=None, **kwargs):
         name = url.rsplit("/", 1)[-1]
         params = request_data.parameters if request_data else {}
-        if name == "editMessageText" and has_icons(params):
+        if name == "editMessageMedia" and has_icons(params):
             env.request.calls.append((name, params))
             raise BadRequest("CUSTOM_EMOJI_INVALID")
         return await original(url, method, request_data, **kwargs)
@@ -75,12 +75,12 @@ async def test_rejected_icon_retries_same_card_without_sending_new_message(env, 
     monkeypatch.setattr(env.request, "do_request", reject_icons)
     await env.callback(CLIENT, "c:category:exchanges", card=8123)
     messages = [(name, params) for name, params in env.request.calls
-                if name in {"editMessageText", "sendMessage"}]
-    assert [name for name, _ in messages] == ["editMessageText", "editMessageText"]
+                if name in {"editMessageMedia", "sendMessage", "sendPhoto", "editMessageCaption"}]
+    assert [name for name, _ in messages] == ["editMessageMedia", "editMessageMedia"]
     first, second = [params for _, params in messages]
     assert first["message_id"] == second["message_id"] == 8123
     assert first["chat_id"] == second["chat_id"] == CLIENT
-    assert first["text"] == second["text"]
+    assert first["media"]["caption"] == second["media"]["caption"]
     assert has_icons(first) and not has_icons(second)
     assert not theme.enabled()
 
@@ -93,7 +93,7 @@ async def test_uncertain_edit_never_sends_another_message(env, tmp_path, monkeyp
     async def uncertain_edit(url, method, request_data=None, **kwargs):
         name = url.rsplit("/", 1)[-1]
         params = request_data.parameters if request_data else {}
-        if name == "editMessageText":
+        if name == "editMessageMedia":
             env.request.calls.append((name, params))
             if reject_first and has_icons(params):
                 raise BadRequest("CUSTOM_EMOJI_INVALID")
@@ -103,6 +103,6 @@ async def test_uncertain_edit_never_sends_another_message(env, tmp_path, monkeyp
     monkeypatch.setattr(env.request, "do_request", uncertain_edit)
     await env.callback(CLIENT, "c:category:exchanges", card=8123)
     messages = [(name, params) for name, params in env.request.calls
-                if name in {"editMessageText", "sendMessage"}]
-    assert [name for name, _ in messages] == ["editMessageText"] * (2 if reject_first else 1)
+                if name in {"editMessageMedia", "sendMessage", "sendPhoto", "editMessageCaption"}]
+    assert [name for name, _ in messages] == ["editMessageMedia"] * (2 if reject_first else 1)
     assert all(params["message_id"] == 8123 for _, params in messages)

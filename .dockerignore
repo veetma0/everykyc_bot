@@ -6,3 +6,6 @@
 !verifydesk/**
 **/__pycache__/
 **/*.pyc
+!assets/
+!assets/showcase/
+!assets/showcase/*.jpg

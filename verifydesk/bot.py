@@ -5,7 +5,7 @@ import time
 from html import escape
 from urllib.parse import urlsplit
 
-from telegram import BotCommand, BotCommandScopeChat, ForceReply, Update
+from telegram import BotCommand, BotCommandScopeChat, ForceReply, Message, Update
 from telegram.constants import ChatType, ParseMode
 from telegram.error import BadRequest, NetworkError, TelegramError
 from telegram.ext import (
@@ -20,6 +20,7 @@ from telegram.ext import (
 )
 
 from .config import Config
+from .media import PanelPhotos, cover_for
 from .store import OPEN_STATUSES, STATUS_NAMES, StaleTicket, Store, can_customer_cancel, ticket_status
 from . import acquisition, catalog, rules, screens, theme, ui
 
@@ -102,6 +103,7 @@ class Desk:
         self.config = config
         self.store = store
         self.notification_digest_at = {}
+        self.panels = PanelPhotos(store.db, config.token.partition(":")[0])
 
     def is_admin(self, user_id: int):
         return user_id in self.config.admin_ids
@@ -119,7 +121,7 @@ class Desk:
         uid = update.effective_user.id
         query = update.callback_query
         data = str(query.data) if query else ""
-        body = update.effective_message.text or ""
+        body = (getattr(query.message, "text", None) if query else update.effective_message.text) or ""
         command = body.split()[0].split("@")[0].lower() if body.split() else ""
         if self.is_admin(uid):
             if command == "/admin" or data in {"a:mode:admin", "a:home"}:
@@ -148,7 +150,7 @@ class Desk:
         context.user_data.pop("order_search_until", None)
         if data == f"c:agree:{rules.VERSION}" and not accepted:
             if self.store.accept_terms(uid, rules.VERSION, len(rules.PAGES) - 1):
-                await self.screen(update, context, *ui.home(self.config.title, self.store.for_user(uid)), customer=True)
+                await self.screen(update, context, *ui.home(self.config.title, self.store.for_user(uid)), customer=True, route="c:home")
                 raise ApplicationHandlerStop
         page = 0
         parts = data.split(":")
@@ -160,7 +162,8 @@ class Desk:
             reached = state["viewed_page"] if state and state["viewed_version"] == rules.VERSION else -1
             if 0 <= requested < len(rules.PAGES) and (accepted or requested <= reached + 1):
                 page = requested
-        shown = await self.screen(update, context, *rules.card(page, accepted=accepted), customer=True)
+        shown = await self.screen(update, context, *rules.card(page, accepted=accepted),
+                                  customer=True, route="c:rules" if accepted else "c:home")
         if shown:
             self.store.mark_terms_page(uid, rules.VERSION, page)
         raise ApplicationHandlerStop
@@ -181,7 +184,7 @@ class Desk:
             if mode == "client"
             else self.admin_home(uid)
         )
-        await self.screen(update, context, *card, customer=mode == "client")
+        await self.screen(update, context, *card, customer=mode == "client", route="c:home" if mode == "client" else "")
 
     def customer_chats(self, uid):
         return [ticket for kind in ("order", "wholesale")
@@ -272,7 +275,7 @@ class Desk:
             self.store.map_customer_reply(ticket.chat_id, message.message_id, ticket.id)
         return state
 
-    async def screen(self, update, context, text, keyboard=None, *, customer=None):
+    async def screen(self, update, context, text, keyboard=None, *, customer=None, route=None):
         query = update.callback_query
         preview = query and isinstance(query.data, str) and query.data.startswith("p:")
         if preview:
@@ -286,7 +289,7 @@ class Desk:
                     words = (update.effective_message.text or "").split()
                     command = words[0].split("@")[0].lower() if words else ""
                     customer = command in {"/profile", "/services", "/help", "/privacy", "/status"} or (
-                        command == "/start" and self.client_mode(update.effective_user.id)
+                        command in {"/start", "/menu"} and self.client_mode(update.effective_user.id)
                     )
             if customer:
                 text = (
@@ -297,33 +300,73 @@ class Desk:
                 keyboard = self.customer_keyboard(update.effective_user.id, keyboard)
         if not preview and (not self.is_admin(update.effective_user.id) or customer):
             keyboard = self.customer_keyboard(update.effective_user.id, keyboard)
-        if query and query.message:
-            # A card edited into a menu must stop being a reply target for its previous ticket.
-            self.store.unmap_reply(update.effective_chat.id, query.message.message_id)
+        chat_id = update.effective_chat.id
+        uid = update.effective_user.id
+        if route is None:
+            if query:
+                route = str(query.data)
+            else:
+                words = (update.effective_message.text or "").split()
+                route = words[0].split("@")[0].lower() if words else ""
+        public = preview or customer or not self.is_admin(uid) or route == "/preview"
+        cover = cover_for(route, text) if public else None
+        original = query.message if query and isinstance(query.message, Message) else None
+        known_panel = self.panels.is_panel(original)
+        # A photo relayed by a client or operator remains an intact reply target.
+        # Telegram can add art to a text message, but cannot remove art with editMessageText.
+        source = original if original and (original.text or (known_panel and cover)) else None
+
+        def unmap(message_id):
+            self.store.unmap_reply(chat_id, message_id)
             with self.store.db:
                 self.store.db.execute("DELETE FROM review_reply_targets WHERE user_id=? AND message_id=?",
-                                      (update.effective_user.id, query.message.message_id))
-            for attempt in range(2):
-                try:
-                    await query.edit_message_text(
-                        text=text, parse_mode=ParseMode.HTML, reply_markup=keyboard, disable_web_page_preview=True
-                    )
-                    self.map_customer_card(update, query.message, keyboard)
-                    return query.message
-                except BadRequest as exc:
-                    if "message is not modified" in str(exc).lower():
-                        self.map_customer_card(update, query.message, keyboard)
-                        return query.message
-                    if attempt == 0 and theme.enabled():
-                        theme.disable()
-                        text, keyboard = theme.without_custom_emoji(text, keyboard)
-                        continue
+                                      (uid, message_id))
+
+        while True:
+            try:
+                message = await self.panels.show(context.bot, chat_id, source, cover, text, keyboard)
+                break
+            except BadRequest as exc:
+                reason = str(exc).lower()
+                if source and "message is not modified" in reason:
+                    message = source
                     break
-                except NetworkError:
-                    return None
-                except TelegramError:
-                    break
-        message, _ = await deliver(context.bot, update.effective_chat.id, text, keyboard)
+                if theme.enabled() and ("emoji" in reason or "icon" in reason):
+                    theme.disable()
+                    text, keyboard = theme.without_custom_emoji(text, keyboard)
+                    continue
+                if source:
+                    source = None
+                    continue
+                if cover:
+                    cover = None
+                    continue
+                log.warning("Telegram отклонил экран меню")
+                return None
+            except OSError as exc:
+                if not cover:
+                    raise
+                log.warning("Обложка %s недоступна: %s", cover, type(exc).__name__)
+                cover = None
+                if known_panel:
+                    source = None
+            except NetworkError:
+                if source:
+                    # The edit may have arrived. An old binding must never route a reply
+                    # to a different order from the card that the customer now sees.
+                    unmap(source.message_id)
+                return None
+            except TelegramError:
+                return None
+        if source:
+            unmap(source.message_id)
+        elif known_panel:
+            # Only deactivate an obsolete menu after its successor was delivered.
+            # The old caption and any order-specific reply binding remain correct.
+            try:
+                await original.edit_reply_markup(reply_markup=None)
+            except TelegramError:
+                pass
         self.map_customer_card(update, message, keyboard)
         return message
 
@@ -343,12 +386,12 @@ class Desk:
             await self.screen(update, context, f"Ваш Telegram ID: <code>{uid}</code>")
         elif command in {"/admin", "/client"}:
             if not self.is_admin(uid):
-                await self.screen(update, context, "Эта команда доступна только оператору.")
+                await self.screen(update, context, "Эта команда доступна только оператору.", route="")
                 return
             await self.switch_mode(update, context, "admin" if command == "/admin" else "client")
         elif command in {"/clients", "/preview", "/style", "/sources", "/next", "/order"}:
             if not self.is_admin(uid):
-                await self.screen(update, context, "Эта команда доступна только оператору.")
+                await self.screen(update, context, "Эта команда доступна только оператору.", route="")
                 return
             if self.client_mode(uid) and command != "/preview":
                 await self.screen(
@@ -378,14 +421,14 @@ class Desk:
             elif command == "/preview":
                 text, keyboard = ui.home(self.config.title, None)
                 await self.screen(
-                    update, context, "<b>👀 ПРЕДПРОСМОТР</b>\n\n" + text, self.preview_keyboard(keyboard)
+                    update, context, "<b>👀 ПРЕДПРОСМОТР</b>\n\n" + text, self.preview_keyboard(keyboard), route="/preview"
                 )
             else:
                 await self.style_preview(update, context)
         elif command == "/profile":
             await self.profile_screen(update, context, uid)
         elif command == "/services":
-            await self.screen(update, context, *screens.catalog_card())
+            await self.screen(update, context, *screens.catalog_card(), route="c:catalog")
         elif command == "/help":
             await self.help(update, context)
         elif command == "/privacy":
@@ -409,8 +452,8 @@ class Desk:
             if ticket:
                 await self.customer_callback(update, context, uid, ["c", "cancel", str(ticket.id), str(ticket.version)])
             else:
-                await self.screen(update, context, *ui.home(self.config.title, self.store.for_user(uid)))
-        elif command == "/start" and self.is_admin(uid):
+                await self.screen(update, context, *ui.home(self.config.title, self.store.for_user(uid)), route="c:home")
+        elif command in {"/start", "/menu"} and self.is_admin(uid):
             try:
                 commands = customer_commands(True) if self.client_mode(uid) else operator_commands()
                 await context.bot.set_my_commands(commands, scope=BotCommandScopeChat(uid))
@@ -423,7 +466,7 @@ class Desk:
             )
             await self.screen(update, context, *card)
         else:
-            await self.screen(update, context, *ui.home(self.config.title, self.store.for_user(uid)))
+            await self.screen(update, context, *ui.home(self.config.title, self.store.for_user(uid)), route="c:home")
 
     async def help(self, update, context):
         current = self.store.for_user(update.effective_user.id, active_only=True)
@@ -637,7 +680,7 @@ class Desk:
                 ticket = self.store.for_user(uid, active_only=True, kind="wholesale")
                 if not ticket:
                     text, keyboard = screens.catalog_card()
-                    await self.screen(update, context, "Отдельные обсуждения опта больше не открываются.\n\n" + text, keyboard)
+                    await self.screen(update, context, "Отдельные обсуждения опта больше не открываются.\n\n" + text, keyboard, route="c:catalog")
                     return
             else:
                 ticket = self.authorized_ticket(int(parts[2]), uid)
@@ -680,21 +723,21 @@ class Desk:
                 *ui.home(self.config.title, None if preview else self.store.for_user(uid)),
             )
         elif verb == "catalog":
-            await self.screen(update, context, *screens.catalog_card())
+            await self.screen(update, context, *screens.catalog_card(), route="c:catalog")
         elif verb == "category":
             page = int(parts[3]) if len(parts) > 3 else 0
             await self.screen(update, context, *screens.category_card(parts[2], page))
         elif verb == "service":
-            await self.screen(update, context, *screens.service_card(parts[2]))
+            await self.screen(update, context, *screens.service_card(parts[2]), route=f"c:service:{parts[2]}")
         elif verb in {"offer", "order"} and (parts[2], parts[3]) not in catalog.OFFERS:
             # Old region cards must show current terms and require a fresh order click.
-            await self.screen(update, context, *screens.service_card(parts[2]))
+            await self.screen(update, context, *screens.service_card(parts[2]), route=f"c:service:{parts[2]}")
         elif verb == "offer":
             await self.screen(update, context, *screens.offer_card(catalog.offer(parts[2], parts[3])))
         elif verb == "order":
             selected = catalog.offer(parts[2], parts[3])
             if not selected.available:
-                await self.screen(update, context, *screens.offer_card(selected))
+                await self.screen(update, context, *screens.offer_card(selected), route=f"c:offer:{selected.service}")
                 return
             ticket, created = self.store.create_ticket(
                 uid, selected.service, selected.plan, None if selected.demo else selected.price_usd
@@ -764,6 +807,7 @@ class Desk:
                 update,
                 context,
                 *(ui.customer_ticket(current, self.config.timezone) if current else screens.catalog_card()),
+                route="c:current" if current else "c:catalog",
             )
         elif verb == "help":
             await self.help(update, context)
@@ -779,9 +823,10 @@ class Desk:
                 update,
                 context,
                 *(ui.customer_ticket(current, self.config.timezone) if current else screens.catalog_card()),
+                route="c:current" if current else "c:catalog",
             )
         elif verb == "create":
-            await self.screen(update, context, *screens.catalog_card())
+            await self.screen(update, context, *screens.catalog_card(), route="c:catalog")
         elif verb in {"view", "details", "history", "cancel", "close", "message", "write", "requisites", "proof_prompt"}:
             ticket = self.authorized_ticket(int(parts[2]), uid)
             if not ticket:
@@ -845,7 +890,7 @@ class Desk:
         if verb == "preview":
             text, keyboard = ui.home(self.config.title, None)
             await self.screen(
-                update, context, "<b>👀 ПРЕДПРОСМОТР</b>\n\n" + text, self.preview_keyboard(keyboard)
+                update, context, "<b>👀 ПРЕДПРОСМОТР</b>\n\n" + text, self.preview_keyboard(keyboard), route="/preview"
             )
             return
         if self.client_mode(uid):
@@ -1194,7 +1239,7 @@ class Desk:
         await self.screen(
             update,
             context,
-            f"<b>🎨 Оформление Эврикус</b>\n\n{result}\n\nДля премиум-эмодзи Telegram требует Premium у владельца бота или дополнительный username на Fragment. Основные кнопки работают и без них.",
+            f"<b>Оформление {escape(self.config.title)}</b>\n\n{result}\n\nДля премиум-эмодзи Telegram требует Premium у владельца бота или дополнительный username на Fragment. Основные кнопки работают и без них.",
             ui.Keyboard([[ui.action("🧑‍💻 Кабинет оператора", "a:home")]]),
         )
 
@@ -1639,6 +1684,7 @@ def build_application(config: Config, store: Store, *, request=None):
         CommandHandler(
             [
                 "start",
+                "menu",
                 "help",
                 "status",
                 "cancel",

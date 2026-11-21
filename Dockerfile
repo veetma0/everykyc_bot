@@ -6,5 +6,6 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && useradd --uid 10001 --create-home bot \
     && mkdir /app/data && chown bot:bot /app/data
 COPY --chown=bot:bot verifydesk ./verifydesk
+COPY --chown=bot:bot assets/showcase/ ./assets/showcase/
 USER bot
 CMD ["python", "-m", "verifydesk"]
