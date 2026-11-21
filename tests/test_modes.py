@@ -37,6 +37,7 @@ async def test_same_admin_can_complete_real_client_flow_then_answer_as_operator(
     assert 'a:mode:admin' in callbacks(last(env, ADMIN))
     assert 'c:offer:claude:standard' not in callbacks(last(env, ADMIN))
     await press(env, 'c:catalog')
+    await press(env, 'c:sections')
     await press(env, 'c:category:other')
     await press(env, 'c:service:claude')
     assert any('$45' in b['text'] for b in buttons(last(env, ADMIN)))
@@ -138,8 +139,9 @@ async def test_client_mode_rejects_old_operator_and_note_reply_context(env, kind
     assert len(sent(env, CLIENT)) == before_customer
     assert len(user_rows(env, own.id)) == before_own
     assert env.store.profile(CLIENT).operator_note == ''
-    assert 'c:current' in callbacks(last(env, ADMIN))
-    await env.callback(ADMIN, 'c:current')
+    assert 'c:home' in callbacks(last(env, ADMIN))
+    await env.callback(ADMIN, 'c:home')
+    assert f'c:chat:{own.id}' in callbacks(last(env, ADMIN))
     assert 'a:mode:admin' in callbacks(last(env, ADMIN))
     assert env.store.operator_mode(ADMIN) == 'client'
 
@@ -202,6 +204,8 @@ async def test_customer_home_opens_categories_then_service_without_geography(env
     assert 'c:wholesale' not in callbacks(home)
     assert '$' not in home['text']
     await env.callback(CLIENT, 'c:catalog')
+    assert 'c:sections' in callbacks(last(env, CLIENT))
+    await env.callback(CLIENT, 'c:sections')
     assert 'c:category:other' in callbacks(last(env, CLIENT))
     await env.callback(CLIENT, 'c:category:other')
     assert 'c:service:claude' in callbacks(last(env, CLIENT))
@@ -247,6 +251,7 @@ async def test_preview_inside_client_mode_cannot_create_request_or_change_role(e
     await env.message(ADMIN, '/client')
     await env.message(ADMIN, '/preview')
     await press(env, 'p:catalog')
+    await press(env, 'p:sections')
     await press(env, 'p:category:other')
     await press(env, 'p:service:claude')
     await press(env, 'p:order:claude:standard')

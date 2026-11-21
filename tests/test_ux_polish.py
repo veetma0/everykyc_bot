@@ -100,10 +100,12 @@ async def test_malformed_history_recovery_screen_has_no_hidden_reply_destination
     assert len(sent(env, ADMIN)) == before
 
 
-async def test_existing_order_warning_explicitly_preserves_its_reply_target(env):
+async def test_conflicting_order_returns_to_home_without_mapping_replies_until_resumed(env):
     ticket = await order(env)
     await env.callback(CLIENT, "c:order:alipay:standard", card=984)
-    assert f"c:view:{ticket.id}" in callbacks(last(env, CLIENT))
+    assert f"c:chat:{ticket.id}" in callbacks(last(env, CLIENT))
+    assert env.store.customer_reply_ticket(CLIENT, 984) is None
+    await env.callback(CLIENT, f"c:chat:{ticket.id}", card=984)
     target = env.store.customer_reply_ticket(CLIENT, 984)
     assert target is not None and target.id == ticket.id
     await env.message(CLIENT, "Уточнение по существующему заказу", reply_to=984, message_id=985)
@@ -145,7 +147,7 @@ async def test_rejected_proof_requests_replacement_without_returning_to_initial_
     assert "Нужен другой чек" in last(env, CLIENT)["text"]
     assert "Дождитесь реквизитов" not in last(env, CLIENT)["text"]
     assert not any(data.startswith("c:cancel:") for data in callbacks(last(env, CLIENT)))
-    for destination in ("c:home", "c:profile", "c:current"):
+    for destination in ("c:home", "c:current"):
         await env.callback(CLIENT, destination)
         assert "Нужен другой чек" in last(env, CLIENT)["text"]
         assert not any(data.startswith("c:cancel:") for data in callbacks(last(env, CLIENT)))

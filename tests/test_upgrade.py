@@ -86,8 +86,8 @@ async def test_customer_card_never_discloses_operator_note(env):
     env.store.set_note(CLIENT, "Секретная заметка оператора", ADMIN)
     await env.callback(CLIENT, "c:profile")
     text = last(env, CLIENT)["text"]
-    assert "Мои заказы" in text and "Заказ №" in text
-    assert "Claude" in text and "Ожидает оператора" in text
+    assert "История заказов" in text and "завершённые и отменённые" in text
+    assert "Claude" not in text and "Ожидает оператора" not in text
     assert "Секретная заметка" not in text
     assert not any(value.startswith("a:") for value in callbacks(last(env, CLIENT)))
     await env.callback(ADMIN, f"a:client:{CLIENT}")
@@ -115,7 +115,7 @@ async def test_customer_order_history_contains_only_owned_tickets(env):
     await env.callback(CLIENT, "c:orders:0")
     own_callbacks = callbacks(last(env, CLIENT))
     assert f"c:view:{first.id}" in own_callbacks
-    assert f"c:view:{second.id}" in own_callbacks
+    assert f"c:view:{second.id}" not in own_callbacks
     assert f"c:view:{other.id}" not in own_callbacks
     assert all(not value.startswith("a:") for value in own_callbacks)
 
@@ -170,7 +170,7 @@ async def test_retired_payment_menu_returns_to_current_order_without_extra_choic
     await env.callback(CLIENT, f"c:pay:{ticket.id}")
     screen = last(env, CLIENT)
     assert "Заказ" in screen["text"]
-    assert len(buttons(screen)) == 4
+    assert len(buttons(screen)) == 3
     assert not any(":network" in value for value in callbacks(screen))
     assert not any(method in {"sendInvoice", "createInvoiceLink"} for method, _ in env.request.calls)
 
@@ -180,7 +180,7 @@ async def test_retired_network_pages_cannot_restore_old_button_menus(env):
     for group in catalog.NETWORK_GROUPS:
         for offset in (0, 8, 16):
             await env.callback(CLIENT, f"c:networks:{ticket.id}:{group}:{offset}")
-            assert len(buttons(last(env, CLIENT))) == 4
+            assert len(buttons(last(env, CLIENT))) == 3
             assert not any(":network" in value for value in callbacks(last(env, CLIENT)))
     assert env.store.ticket(ticket.id).demo_network is None
 
@@ -192,7 +192,7 @@ async def test_retired_network_selection_is_read_only(env, network):
     ticket = env.store.ticket(initial.id)
     assert ticket == initial
     assert ticket.demo_network is None
-    assert len(callbacks(last(env, CLIENT))) == 4
+    assert len(callbacks(last(env, CLIENT))) == 3
 
 
 async def test_other_customer_cannot_view_or_choose_mock_network_for_ticket(env):
@@ -304,7 +304,7 @@ async def test_help_explains_ordering_and_keeps_official_owner_verification_guid
     assert len(buttons(guide)) == 1
 
 
-@pytest.mark.parametrize("command,expected", [("/services", "Каталог услуг"), ("/profile", "Мои заказы")])
+@pytest.mark.parametrize("command,expected", [("/services", "Каталог услуг"), ("/profile", "История заказов")])
 async def test_new_customer_commands_are_registered_and_reach_the_right_screen(env, command, expected):
     await env.message(CLIENT, command)
     assert expected in last(env, CLIENT)["text"]
@@ -328,7 +328,9 @@ async def test_new_customer_entries_reach_catalog_without_legacy_unpriced_order(
     if "c:catalog" in data:
         await env.callback(CLIENT, "c:catalog")
         data = callbacks(last(env, CLIENT))
-    assert "c:category:other" in data
+    assert "c:sections" in data
+    await env.callback(CLIENT, "c:sections")
+    assert "c:category:other" in callbacks(last(env, CLIENT))
     await env.callback(CLIENT, "c:category:other")
     assert "c:service:claude" in callbacks(last(env, CLIENT))
     await env.callback(CLIENT, "c:service:claude")

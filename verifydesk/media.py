@@ -31,6 +31,8 @@ def cover_for(route: str, text: str) -> str | None:
     if len(parts) < 2 or parts[0] not in {"c", "p"}:
         return None
     verb = parts[1]
+    if verb == "sections":
+        return "catalog"
     if verb in {"home", "catalog", "help", "profile"}:
         return verb
     if verb == "category" and len(parts) > 2:

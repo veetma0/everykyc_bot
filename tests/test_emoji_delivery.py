@@ -45,10 +45,12 @@ def test_service_button_uses_only_its_approved_logo(tmp_path, prefix):
 def test_storefront_uses_themed_navigation_with_correct_emoji_alternatives():
     _, home = ui.home("EVERYKYC", None)
     _, catalog_card = screens.catalog_card()
+    _, sections = screens.sections_card()
     _, offer = screens.offer_card(catalog.offer("bybit", "standard"))
-    buttons = [b for keyboard in (home, catalog_card, offer) for row in keyboard.inline_keyboard for b in row]
+    buttons = [b for keyboard in (home, catalog_card, sections, offer) for row in keyboard.inline_keyboard for b in row]
     for route, key in [
         ("c:catalog", "catalog"), ("c:profile", "profile"), ("c:help", "help"), ("c:order:bybit:standard", "order"),
+        ("c:sections", "catalog"),
         *((f"c:category:{category}", category) for category in catalog.CATEGORIES),
     ]:
         button = next(b for b in buttons if b.callback_data == route)

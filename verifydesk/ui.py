@@ -60,10 +60,13 @@ def conversation_keyboard(tickets, selected_id=None):
     ]])
 
 
+ORDER_LIMIT_NOTICE = "Новый заказ можно оформить после завершения текущего."
+
+
 def home(title: str, ticket: Ticket | None):
     rows = [
         [action("Каталог услуг", "c:catalog", "primary")],
-        [action("Заказы", "c:profile"), action("Помощь", "c:help")],
+        [action("История", "c:profile"), action("Помощь", "c:help")],
     ]
     text = (
         f"<b>{escape(title)} · Помощь с верификацией</b>\n\n"
@@ -87,7 +90,7 @@ def home(title: str, ticket: Ticket | None):
             resume = "Продолжить заказ"
         rows = [
             [action(resume, f"c:chat:{ticket.id}", "primary")],
-            [action("Каталог", "c:catalog"), action("Заказы", "c:profile")],
+            [action("Каталог", "c:catalog"), action("История", "c:profile")],
             [action("Помощь", "c:help")],
         ]
     return text, Keyboard(rows)
@@ -151,7 +154,7 @@ def customer_ticket_navigation(ticket: Ticket):
     rows = [[action("Переписка", f"c:history:{ticket.id}:0")]]
     if can_customer_cancel(ticket):
         rows.append([action("Отменить заказ", f"c:cancel:{ticket.id}:{ticket.version}")])
-    rows.append([action("Мои заказы", "c:profile"), action("Главная", "c:home")])
+    rows.append([action("Главная", "c:home")])
     return rows
 
 

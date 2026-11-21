@@ -126,9 +126,11 @@ async def test_wholesale_and_transaction_keep_separate_messages_and_payment_stat
     assert env.store.profile(CLIENT).total_tickets == 1
 
 
-async def test_context_is_visible_and_can_be_switched_without_a_send_button(env):
+async def test_context_is_visible_on_home_and_can_be_switched_without_a_send_button(env):
     transaction = await order(env)
     discussion = await wholesale(env)
+    assert f"c:chat:{transaction.id}" not in callbacks(last(env, CLIENT))
+    await env.callback(CLIENT, "c:home")
     data = callbacks(last(env, CLIENT))
     assert f"c:chat:{transaction.id}" in data and f"c:chat:{discussion.id}" in data
     assert not any(v.startswith(("c:write:", "c:proof_prompt:", "c:send_draft:")) for v in data)

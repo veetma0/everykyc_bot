@@ -36,6 +36,7 @@ def sample_orders_card(ticket=None):
 def export_cards():
     cards = {"c:home": card(ui.home(catalog.BRAND_NAME, None), customer=True),
              "c:catalog": card(screens.catalog_card(), customer=True),
+             "c:sections": card(screens.sections_card(), customer=True),
              "c:help": card(screens.help_card(), customer=True),
              "c:privacy": card((ui.PRIVACY, ui.Keyboard([[ui.action("Главная", "c:home")]])), customer=True)}
     for category in catalog.CATEGORIES:
@@ -46,7 +47,7 @@ def export_cards():
     for offer in catalog.OFFERS.values():
         cards[f"c:service:{offer.service}"] = card(screens.offer_card(offer), customer=True)
         cards[f"c:guide:{offer.service}"] = card((screens.guide(offer.service), ui.Keyboard([
-            [ui.action("‹ К заказу", "c:current")],
+            [ui.action("‹ Главная", "c:home")],
         ])), customer=True)
     cards["c:guide:general"] = card((screens.guide("general"), ui.Keyboard([
         [ui.action("Каталог услуг", "c:catalog")],
@@ -56,15 +57,13 @@ def export_cards():
         cards[f"c:rules:{rules.VERSION}:{page}"] = card(rules.card(page, accepted=True), customer=True)
     cards["c:rules"] = card(rules.full_card(accepted=True), customer=True)
     samples, examples = {}, {"onboarding:full": card(rules.full_card(), "rules:full")}
-    open_offers, offer_paragraphs = {}, {}
     for page in range(len(rules.PAGES)):
         examples[f"onboarding:{page}"] = card(rules.card(page))
     with TemporaryDirectory(prefix="everykyc-preview-") as directory:
         store = Store(Path(directory) / "preview.sqlite3")
         store.remember_user(1, 1, "Пример клиента", None)
-        empty = store.profile(1)
-        cards["c:profile"] = card(screens.profile_card(empty, None, "UTC"), customer=True)
         cards["c:orders:0"] = sample_orders_card()
+        cards["c:profile"] = cards["c:orders:0"]
         ticket, _ = store.create_ticket(1, "bybit", "standard", "50.00")
         profile = store.profile(1)
         store.add_message(ticket.id, "user", "Здравствуйте! Нужна помощь с проверкой моего аккаунта.", 1, 1, 1)
@@ -98,39 +97,18 @@ def export_cards():
             samples[offer.service]["history_customer"] = card(
                 ui.history(current, sample_messages, history_total, 0, False, "UTC"), "c:history:1:0",
             )
-            samples[offer.service]["context"] = {}
-            # The same active order can be visible on any service card. Intern
-            # recurring paragraphs so every combination uses the actual bot copy.
-            samples[offer.service]["open_offers"] = {}
-            for selected in catalog.OFFERS.values():
-                if not selected.available:
-                    continue
-                panel = screens.offer_card(selected, current)
-                if selected.service not in open_offers:
-                    exported = card(panel, f"c:service:{selected.service}")
-                    del exported["text"]
-                    open_offers[selected.service] = exported
-                samples[offer.service]["open_offers"][selected.service] = [
-                    offer_paragraphs.setdefault(paragraph, len(offer_paragraphs))
-                    for paragraph in panel[0].split("\n\n")
-                ]
+            samples[offer.service]["completed_orders"] = sample_orders_card(done)
+            samples[offer.service]["home"] = {}
             for name, sample in stages.items():
                 active = sample if sample.status in OPEN_STATUSES else None
-                summary = replace(profile, active_tickets=int(active is not None),
-                                  resolved_tickets=int(sample.status == "resolved"))
-                samples[offer.service]["context"][name] = {
-                    "home": card(ui.home(catalog.BRAND_NAME, active), "c:home"),
-                    "profile": card(screens.profile_card(summary, active, "UTC"), "c:profile"),
-                    "help": card(screens.help_card(active), "c:help"),
-                    "orders": sample_orders_card(sample),
-                }
+                samples[offer.service]["home"][name] = card(ui.home(catalog.BRAND_NAME, active), "c:home")
             if offer.service == "bybit":
                 for name, sample in stages.items():
                     examples[f"admin_ticket:{name}"] = card(ui.admin_ticket(sample))
                     examples[f"admin_details:{name}"] = card(ui.admin_details(sample))
                     examples[f"admin_status:{name}"] = card(ui.status_menu(sample))
                 examples["admin_ticket:review_ready"] = card(ui.admin_ticket(review, proof_ready=True))
-                examples["admin_profile"] = card(screens.profile_card(profile, current, "UTC", admin=True))
+                examples["admin_profile"] = card(screens.admin_profile_card(profile, current, "UTC"))
                 for delivery in ("delivered", "uncertain", "failed"):
                     examples[f"reply:{delivery}"] = card(ui.reply_receipt(working, delivery))
                 examples["review_request"] = card(ui.review_request(done), "notification:review")
@@ -139,8 +117,8 @@ def export_cards():
     for route, panel in cards.items():
         panel["cover"] = cover_for(route, panel["text"])
     return {"cards": cards, "samples": samples, "examples": examples,
-            "open_offers": open_offers, "offer_paragraphs": list(offer_paragraphs),
             "icon_fallbacks": {icon_id: theme.alternative_text(icon_id) for icon_id, _ in theme.NAV_ICONS.values()},
+            "order_limit_notice": ui.ORDER_LIMIT_NOTICE,
             "categories": catalog.CATEGORIES,
             "brand": {"name": catalog.PROFILE_NAME, "short_name": catalog.BRAND_NAME, "short_description": catalog.SHORT_DESCRIPTION,
                       "description": catalog.DESCRIPTION, "banner": "../assets/showcase/welcome.jpg",
@@ -196,7 +174,7 @@ footer{padding:0 28px 25px;color:#53636e;font-size:12px;max-width:1500px;margin:
 </style></head><body>
 <header><h1 id="preview-title"></h1><p class="note">Предпросмотр Telegram с демонстрационными заказами.</p>
 <nav class="views" aria-label="Вид макета"><button class="view" id="view-chat" aria-pressed="true">Интерфейс бота</button><button class="view" id="view-brand" aria-pressed="false">Профиль и баннер</button></nav>
-<div class="controls"><label>Открыть экран<select id="screen"><option value="c:home">Главная</option><option value="c:catalog">Каталог</option><option value="c:help">Помощь</option><option value="c:profile">Мои заказы</option><option value="c:rules">Правила</option><option value="c:privacy">Мои данные</option></select></label>
+<div class="controls"><label>Открыть экран<select id="screen"><option value="c:home">Главная</option><option value="c:catalog">Каталог</option><option value="c:sections">Все разделы</option><option value="c:help">Помощь</option><option value="c:profile">История</option><option value="c:rules">Правила</option><option value="c:privacy">Мои данные</option></select></label>
 <label>Пример заказа<select id="state"><option value="">Без заказа</option><option value="new">Ожидает оператора</option><option value="payment">Ожидает оплаты</option><option value="rejected">Нужен другой чек</option><option value="review">Проверяем оплату</option><option value="working">В работе</option><option value="done">Заказ выполнен</option></select></label><label>Сервис в примере<select id="service"></select></label><label>Другие экраны · пример Bybit<select id="example"><option value="">Выбрать экран</option></select></label><button class="reset" id="reset">Начать сначала</button></div>
 <p class="live-note" id="notice" role="status">Нажимайте кнопки в любом окне. Один экран показан в разных темах и размерах.</p></header>
 <main class="frames" id="frames"></main><footer>Ширина 320 и 390 px · светлая и тёмная темы. Оформление приближено к Telegram для проверки длины строк; реальные шрифты, цвета и расположение блоков зависят от устройства. Фирменные эмодзи бирж проверяются в Telegram отдельно. Примеры заказов и переписки работают локально.</footer>
@@ -206,7 +184,7 @@ const data=JSON.parse(document.querySelector('#data').textContent);let route='c:
 const notice=document.querySelector('#notice'),screen=document.querySelector('#screen'),stateSelect=document.querySelector('#state'),serviceSelect=document.querySelector('#service'),exampleSelect=document.querySelector('#example');
 document.title=data.brand.short_name+' · предпросмотр Telegram';
 document.querySelector('#preview-title').textContent=data.brand.name;
-let previousOption=screen.querySelector('option[value="c:catalog"]');
+let previousOption=screen.querySelector('option[value="c:sections"]');
 for(const [code,title] of Object.entries(data.categories)){
  const option=document.createElement('option');
  option.value='c:category:'+code;
@@ -234,22 +212,13 @@ function currentCard(){
  const sample=data.samples[service];
  if(route.startsWith('c:history:'))return sample.history_customer;
  if(state){
-  if(state!=='done' && route.startsWith('c:service:')){
-   const selected=route.split(':')[2];
-   if(data.open_offers[selected]){
-    const text=sample.open_offers[selected].map(index=>data.offer_paragraphs[index]).join('\n\n');
-    return {...data.open_offers[selected],text};
-   }
-  }
-  if(route==='c:home')return sample.context[state].home;
-  if(route==='c:profile')return sample.context[state].profile;
-  if(route==='c:help')return sample.context[state].help;
-  if(route==='c:orders:0')return sample.context[state].orders;
+  if(route==='c:home')return sample.home[state];
+  if((route==='c:profile'||route==='c:orders:0') && state==='done')return sample.completed_orders;
   if(route==='c:current'||route.startsWith('c:view:')||route.startsWith('c:chat:'))return sample[state];
  }
  return data.cards[route]||data.cards['c:home'];
 }
-function show(next){
+function show(next, extraText=''){
  route=next;
  const isProfile=route==='b:profile';
  const found=isProfile?null:currentCard();
@@ -274,7 +243,7 @@ function show(next){
   if(found?.rich)bubble.insertBefore(keyboard,bubble.querySelector('.time'));
   else bubble.after(keyboard);
   if(!isProfile){
-   bubble.querySelector('.caption').innerHTML=found.text;
+   bubble.querySelector('.caption').innerHTML=extraText ? found.text+'\n\n'+extraText : found.text;
    const cover=bubble.querySelector('.cover'),name=found.cover;
    cover.hidden=!name;
    if(name)cover.src='../assets/showcase/'+name+'.jpg';
@@ -297,7 +266,21 @@ function show(next){
  }
  history.replaceState(null,'','#'+encodeURIComponent(next));
 }
-function navigate(next){notice.textContent='Нажимайте кнопки в любом окне — все темы и размеры обновляются вместе.';if(route.startsWith('x:onboarding:')&&next.startsWith('c:rules:')){show('x:onboarding:'+next.split(':').at(-1));return}if(next.startsWith('c:agree:')||next.startsWith('c:agree_full:')){show(state?'c:home':'c:catalog');notice.textContent='Это только просмотр: согласие не сохраняется.';return}if(next.startsWith('c:rate:')){show('x:review_comment');notice.textContent='Показан пример комментария к оценке. Отзыв не сохраняется.';return}if(next.startsWith('c:history:')){if(route.startsWith('x:')){service='bybit';state=state||'new'}show(next);notice.textContent=`Пример переписки · ${data.services[service]}. Все сообщения вымышлены.`;return}if(next.startsWith('a:history:')){show('x:history_admin');return}if(next.startsWith('c:order:')){service=next.split(':')[2];state='new';notice.textContent='Показан образец нового заказа. Это только локальный просмотр: заявка не создана, сообщений и оплаты нет.';show('c:current');return}const adminRoutes={'a:home':'admin_home','a:more':'admin_more','a:mode:admin':'admin_home'};if(adminRoutes[next]){show('x:'+adminRoutes[next]);return}if(next.startsWith('a:view:')||next.startsWith('a:next')){show('x:admin_ticket:new');return}if(next.startsWith('a:client:')){show('x:admin_profile');return}if(next.startsWith('a:details:')){show('x:admin_details:working');return}if(next.startsWith('a:status:')){show('x:admin_status:working');return}if(data.cards[next]||next==='c:current'||next.startsWith('c:view:')||next.startsWith('c:chat:')){if(next.startsWith('c:view:')&&!state)state='new';show(next);if(next==='c:orders:0')notice.textContent=state?`Пример истории · ${data.services[service]}. Показан один вымышленный заказ.`:'История без заказов · локальный пример.';return}notice.textContent='Это действие не выполняется в локальном макете. Нужный пример состояния можно открыть в списке «Другие экраны».';}
+function navigate(next){notice.textContent='Нажимайте кнопки в любом окне — все темы и размеры обновляются вместе.';if(route.startsWith('x:onboarding:')&&next.startsWith('c:rules:')){show('x:onboarding:'+next.split(':').at(-1));return}if(next.startsWith('c:agree:')||next.startsWith('c:agree_full:')){show(state?'c:home':'c:catalog');notice.textContent='Это только просмотр: согласие не сохраняется.';return}if(next.startsWith('c:rate:')){show('x:review_comment');notice.textContent='Показан пример комментария к оценке. Отзыв не сохраняется.';return}if(next.startsWith('c:history:')){if(route.startsWith('x:')){service='bybit';state=state||'new'}show(next);notice.textContent=`Пример переписки · ${data.services[service]}. Все сообщения вымышлены.`;return}if(next.startsWith('a:history:')){show('x:history_admin');return}
+ if(next.startsWith('c:order:')){
+  const selected=next.split(':')[2];
+  if(state && state!=='done'){
+   if(selected===service)show('c:current');
+   else show('c:home',data.order_limit_notice);
+   return;
+  }
+  service=selected;
+  state='new';
+  notice.textContent='Показан пример нового заказа.';
+  show('c:current');
+  return;
+ }
+ const adminRoutes={'a:home':'admin_home','a:more':'admin_more','a:mode:admin':'admin_home'};if(adminRoutes[next]){show('x:'+adminRoutes[next]);return}if(next.startsWith('a:view:')||next.startsWith('a:next')){show('x:admin_ticket:new');return}if(next.startsWith('a:client:')){show('x:admin_profile');return}if(next.startsWith('a:details:')){show('x:admin_details:working');return}if(next.startsWith('a:status:')){show('x:admin_status:working');return}if(data.cards[next]||next==='c:current'||next.startsWith('c:view:')||next.startsWith('c:chat:')){if(next.startsWith('c:view:')&&!state)state='new';show(next);return}notice.textContent='Это действие не выполняется в локальном макете. Нужный пример состояния можно открыть в списке «Другие экраны».';}
 document.querySelector('#view-chat').onclick=()=>navigate('c:home');document.querySelector('#view-brand').onclick=()=>{show('b:profile');notice.textContent='Пример оформления профиля перед первым запуском. Баннер и тексты показаны из файлов проекта; это не подтверждение публикации.'};screen.onchange=()=>navigate(screen.value);exampleSelect.onchange=()=>{if(exampleSelect.value){service='bybit';show(exampleSelect.value);notice.textContent='Локальный пример Bybit: данные вымышлены, действий в Telegram нет.'}};stateSelect.onchange=()=>{state=stateSelect.value;notice.textContent=state?'Показан только образец состояния заказа. Реальных заказов и платежей нет.':'Показан интерфейс без активного заказа.';show(state?'c:current':'c:home')};serviceSelect.onchange=()=>{service=serviceSelect.value;show(state?'c:current':`c:service:${service}`)};document.querySelector('#reset').onclick=()=>{state='';service='bybit';navigate('c:home')};
 const params=new URLSearchParams(location.search);if(data.samples[params.get('service')])service=params.get('service');if(['new','payment','rejected','review','working','done'].includes(params.get('state')))state=params.get('state');let initial=decodeURIComponent(location.hash.slice(1));show(initial==='b:profile'||data.cards[initial]||data.examples[initial.slice(2)]||initial.startsWith('c:history:')||(initial==='c:current'&&state)?initial:'c:home');
 </script></body></html>'''

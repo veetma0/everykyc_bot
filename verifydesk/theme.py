@@ -59,6 +59,8 @@ def button_icon(text, data, style):
         return None
     if action == "category" and len(parts) == 3:
         key = parts[2]
+    elif action == "sections":
+        key = "catalog"
     elif action in {"catalog", "profile", "help", "order"}:
         key = action
     elif action in {"chat", "view"} and style == "primary" and text in {"Открыть заказ", "Открыть чат"}:

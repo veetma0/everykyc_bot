@@ -56,6 +56,7 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
 
     env.require_terms = True
     await read_and_accept(env)
+    await press(env, CLIENT, "c:sections")
     await press(env, CLIENT, "c:category:other")
     await press(env, CLIENT, "c:service:claude")
     await press(env, CLIENT, "c:order:claude:standard")
@@ -97,7 +98,8 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
     await env.message(CLIENT, "/status")
     await press(env, CLIENT, "c:guide:claude")
     assert "Проверку проходите самостоятельно" in last(env, CLIENT)["text"]
-    await press(env, CLIENT, "c:current")
+    await press(env, CLIENT, "c:home")
+    await press(env, CLIENT, f"c:chat:{ticket.id}")
 
     await env.callback(ADMIN, f"a:view:{ticket.id}")
     version = env.store.ticket(ticket.id).version
@@ -110,9 +112,9 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
     await env.message(CLIENT, "/profile")
     profile = env.store.profile(CLIENT)
     assert (profile.total_tickets, profile.active_tickets, profile.resolved_tickets) == (1, 0, 1)
-    await press(env, CLIENT, "c:orders:0")
     await press(env, CLIENT, f"c:view:{ticket.id}")
     await press(env, CLIENT, "c:catalog")
+    await press(env, CLIENT, "c:sections")
     await press(env, CLIENT, "c:category:wallets")
     await press(env, CLIENT, "c:service:alipay")
     await press(env, CLIENT, "c:order:alipay:standard")
@@ -126,19 +128,20 @@ async def test_every_retired_network_button_returns_to_current_order_without_net
     before = env.store.ticket(ticket.id)
     for network in catalog.NETWORKS:
         await env.callback(CLIENT, f"c:network:{ticket.id}:{network.code}")
-        assert len(callbacks(last(env, CLIENT))) == 4
+        assert len(callbacks(last(env, CLIENT))) == 3
         assert not any(":network" in value for value in callbacks(last(env, CLIENT)))
         assert env.store.ticket(ticket.id) == before
     assert not any(method in {"sendInvoice", "createInvoiceLink"} for method, _ in env.request.calls)
 
 
 @pytest.mark.parametrize("admin", [False, True])
-async def test_history_navigation_reaches_all_own_tickets_over_three_pages(env, admin):
+async def test_history_navigation_reaches_only_tickets_visible_to_each_role(env, admin):
     env.store.remember_user(CLIENT, CLIENT, "Клиент", None)
     expected = set()
     for index in range(18):
         ticket, _ = env.store.create_ticket(CLIENT, "claude", "armenia", "35.00")
-        expected.add(ticket.id)
+        if admin or index < 17:
+            expected.add(ticket.id)
         if index < 17:
             legacy_ticket(env.store, ticket)
             env.store.set_status(ticket.id, ticket.version, "resolved", ADMIN)
@@ -147,7 +150,8 @@ async def test_history_navigation_reaches_all_own_tickets_over_three_pages(env, 
     base = f"a:orders:{CLIENT}" if admin else "c:orders"
     await env.callback(uid, base + ":0")
     found = set()
-    for offset in (0, 8, 16):
+    page_size = 8 if admin else 4
+    for offset in range(0, len(expected), page_size):
         screen = last(env, uid)
         found.update(
             int(value.rsplit(":", 1)[-1])
@@ -155,12 +159,12 @@ async def test_history_navigation_reaches_all_own_tickets_over_three_pages(env, 
             if value.startswith(prefix + ":view:")
         )
         assert f"{prefix}:view:{stranger.id}" not in callbacks(screen)
-        if offset < 16:
-            await press(env, uid, f"{base}:{offset + 8}")
+        if offset + page_size < len(expected):
+            await press(env, uid, f"{base}:{offset + page_size}")
     assert found == expected
-    await press(env, uid, f"{base}:8")
-    await press(env, uid, f"{base}:0")
-    await press(env, uid, f"a:client:{CLIENT}" if admin else "c:profile")
+    for previous in range(offset - page_size, -1, -page_size):
+        await press(env, uid, f"{base}:{previous}")
+    await press(env, uid, f"a:client:{CLIENT}" if admin else "c:home")
 
 
 async def test_client_list_pagination_reaches_all_real_clients_and_preserves_empty_state(env):
@@ -278,7 +282,7 @@ async def test_every_generated_callback_stays_within_telegram_size_limit(env):
 async def test_legacy_create_button_leads_to_current_offers_before_order_creation(env):
     await env.callback(CLIENT, "c:create")
     assert env.store.for_user(CLIENT) is None
-    assert "c:category:other" in callbacks(last(env, CLIENT))
+    await press(env, CLIENT, "c:sections")
     await press(env, CLIENT, "c:category:other")
     await press(env, CLIENT, "c:service:claude")
     assert "c:order:claude:standard" in callbacks(last(env, CLIENT))

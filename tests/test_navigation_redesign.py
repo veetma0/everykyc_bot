@@ -35,10 +35,11 @@ async def test_home_keeps_only_shopping_orders_and_help(env):
 async def test_order_history_identifies_service_and_status_with_a_short_numbered_button(env):
     await env.callback(CLIENT, "c:order:fragment:standard")
     ticket = env.store.for_user(CLIENT, active_only=True)
+    env.store.set_status(ticket.id, ticket.version, "cancelled", ADMIN)
     await env.callback(CLIENT, "c:orders:0")
     card = last(env, CLIENT)
     assert f"№{ticket.id:04d} · Telegram Fragment" in card["text"]
-    assert "Ожидает оператора" in card["text"]
+    assert "отмен" in card["text"].lower()
     assert card["reply_markup"]["inline_keyboard"][0][0]["text"] == f"Заказ №{ticket.id:04d}"
     await env.callback(CLIENT, f"c:view:{ticket.id}")
     assert "Telegram Fragment" in last(env, CLIENT)["text"]
@@ -88,28 +89,30 @@ async def test_all_home_entry_points_keep_individual_service_buttons_in_catalog(
 
 
 @pytest.mark.parametrize("service", ["bybit", "claude"])
-async def test_priced_offer_opens_an_existing_order_directly_without_switching_chat_on_browse(env, service):
+async def test_browsing_is_impersonal_and_checkout_preserves_existing_order(env, service):
     ticket = await order(env, service="bybit")
     discussion = existing_discussion(env)
     env.store.set_customer_focus(CLIENT, discussion.id)
     before = len(sent(env, ADMIN))
-    await env.callback(CLIENT, "c:catalog")
     await env.callback(CLIENT, f"c:service:{service}")
     card = last(env, CLIENT)
     assert catalog.offer_price(catalog.offer(service, "standard")) in card["text"]
-    assert f"Ваш открытый заказ №{ticket.id:04d}" in card["text"]
-    assert "Bybit · $50" in card["text"]
-    assert callbacks(card)[0] == f"c:view:{ticket.id}"
-    assert f"c:chat:{ticket.id}" not in callbacks(card)
-    assert not any(target.startswith("c:order:") for target in callbacks(card))
+    assert "№" not in card["text"]
+    assert callbacks(card)[0] == f"c:order:{service}:standard"
     assert env.store.customer_focus(CLIENT).id == discussion.id
     await env.callback(CLIENT, callbacks(card)[0])
-    assert env.store.customer_focus(CLIENT).id == ticket.id
-    assert f"Заказ №{ticket.id:04d}" in last(env, CLIENT)["text"]
+    result = last(env, CLIENT)
+    if service == "bybit":
+        assert f"c:history:{ticket.id}:0" in callbacks(result)
+        assert env.store.customer_focus(CLIENT).id == ticket.id
+    else:
+        assert "Новый заказ можно оформить после завершения текущего." in result["text"]
+        assert callbacks(result)[0] == f"c:chat:{ticket.id}"
+        assert "c:catalog" in callbacks(result)
+        assert env.store.customer_focus(CLIENT).id == discussion.id
+    assert f"Заказ №{ticket.id:04d}" in result["text"]
+    assert env.store.ticket(ticket.id).price_usd == ticket.price_usd
     assert ticket_count(env) == 2 and len(sent(env, ADMIN)) == before
-    env.store.set_status(ticket.id, ticket.version, "cancelled", ADMIN)
-    await env.callback(CLIENT, f"c:service:{service}")
-    assert callbacks(last(env, CLIENT))[0] == f"c:order:{service}:standard"
 
 
 def test_named_offer_recognizes_displayed_names_but_not_unrelated_messages():
@@ -145,15 +148,22 @@ async def test_exact_service_name_in_existing_discussion_is_delivered(env):
     assert env.store.for_user(CLIENT) is None
 
 
-async def test_legacy_conversation_switches_do_not_duplicate_visible_order_action(env):
+async def test_active_chat_buttons_and_details_are_confined_to_home_while_browsing(env):
     discussion = existing_discussion(env)
-    ticket = await order(env)
-    for entry, order_action in (("c:profile", f"c:view:{ticket.id}"), ("c:help", "c:current")):
-        await env.callback(CLIENT, entry)
-        actions = callbacks(last(env, CLIENT))
-        assert order_action in actions
-        assert f"c:chat:{ticket.id}" not in actions
-        assert f"c:chat:{discussion.id}" in actions
+    ticket = await order(env, service="bybit")
+    await env.callback(CLIENT, "c:home")
+    actions = callbacks(last(env, CLIENT))
+    assert actions.count(f"c:chat:{ticket.id}") == actions.count(f"c:chat:{discussion.id}") == 1
+    for target in ("c:catalog", "c:sections", "c:category:exchanges", "c:service:claude",
+                   "c:offer:alipay:standard", "c:guide:general", "c:guide:claude", "c:help",
+                   "c:privacy", "c:rules", "c:service:chatgpt", "c:service:localbitcoins"):
+        await env.callback(CLIENT, target)
+        card = last(env, CLIENT)
+        for number in (ticket.id, discussion.id):
+            assert f"№{number:04d}" not in card["text"]
+        assert not any(target.startswith(("c:chat:", "c:view:", "c:current", "c:orders:", "c:profile"))
+                       for target in callbacks(card))
+    assert env.store.customer_focus(CLIENT).id == ticket.id
     await env.callback(CLIENT, f"c:chat:{discussion.id}")
     assert env.store.customer_focus(CLIENT).id == discussion.id
 
@@ -167,7 +177,7 @@ async def test_catalog_shortcut_opens_priced_offer_without_creating_order(env, s
     selected = catalog.offer(service, "standard")
     shortcut = next(button for row in last(env, CLIENT)["reply_markup"]["inline_keyboard"] for button in row
                     if button["callback_data"] == f"c:service:{service}")
-    assert catalog.offer_price(selected) in shortcut["text"]
+    assert f'{shortcut["text"]} · {catalog.offer_price(selected)}' in last(env, CLIENT)["text"]
     await env.callback(CLIENT, shortcut["callback_data"])
     card = last(env, CLIENT)
     assert selected.title in card["text"]
@@ -192,7 +202,7 @@ async def test_stale_wholesale_button_cannot_create_or_notify(env):
     for _ in range(2):
         await env.callback(CLIENT, "c:wholesale")
         assert ticket_count(env) == 0
-        assert any(data.startswith("c:category:") for data in callbacks(last(env, CLIENT)))
+        assert "c:sections" in callbacks(last(env, CLIENT))
         assert "c:wholesale" not in callbacks(last(env, CLIENT))
     assert not sent(env, ADMIN)
 
@@ -252,8 +262,6 @@ async def test_closed_legacy_discussion_is_reachable_even_without_orders(env):
     env.store.set_status(discussion.id, discussion.version, "resolved", ADMIN)
     assert env.store.profile(CLIENT).total_tickets == 0
     await env.callback(CLIENT, "c:profile")
-    assert "c:orders:0" in callbacks(last(env, CLIENT))
-    await env.callback(CLIENT, "c:orders:0")
     assert f"c:view:{discussion.id}" in callbacks(last(env, CLIENT))
     await env.callback(CLIENT, f"c:view:{discussion.id}")
     assert f"c:history:{discussion.id}:0" in callbacks(last(env, CLIENT))
@@ -276,11 +284,13 @@ async def test_help_has_explicit_destinations_without_order(env):
     assert "c:catalog" in callbacks(last(env, CLIENT))
 
 
-async def test_help_returns_to_current_order_when_one_exists(env):
+async def test_help_returns_to_home_to_resume_an_order(env):
     ticket = await order(env)
     await env.callback(CLIENT, "c:help")
-    assert "c:current" in callbacks(last(env, CLIENT))
-    await env.callback(CLIENT, "c:current")
+    assert "c:current" not in callbacks(last(env, CLIENT))
+    assert "c:home" in callbacks(last(env, CLIENT))
+    await env.callback(CLIENT, "c:home")
+    await env.callback(CLIENT, callbacks(last(env, CLIENT))[0])
     assert f"c:history:{ticket.id}:0" in callbacks(last(env, CLIENT))
     assert env.store.customer_focus(CLIENT).id == ticket.id
 
@@ -300,7 +310,8 @@ async def test_order_history_is_visible_and_returns_to_the_same_order(env):
     ticket = await order(env)
     await env.message(CLIENT, "Сохраните этот вопрос", message_id=930)
     await env.callback(CLIENT, f"c:view:{ticket.id}")
-    assert {f"c:history:{ticket.id}:0", "c:profile", "c:home"} <= set(callbacks(last(env, CLIENT)))
+    assert {f"c:history:{ticket.id}:0", "c:home"} <= set(callbacks(last(env, CLIENT)))
+    assert "c:profile" not in callbacks(last(env, CLIENT))
     await env.callback(CLIENT, f"c:history:{ticket.id}:0")
     assert "Сохраните этот вопрос" in last(env, CLIENT)["text"]
     assert f"c:view:{ticket.id}" in callbacks(last(env, CLIENT))
