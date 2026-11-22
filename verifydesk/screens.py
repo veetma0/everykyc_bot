@@ -1,14 +1,15 @@
-"""Small native screens for the catalog, personal cards and mock checkout."""
+"""Native Telegram screens for the catalog, orders and network selection."""
 
 from datetime import datetime
 from html import escape
 from zoneinfo import ZoneInfo
 
 from . import catalog, ui
-from .store import OPEN_STATUSES, ticket_status
+from .store import ticket_status
 
 
 CATALOG_PAGE_SIZE = 5
+NETWORK_PAGE_SIZE = 8
 
 
 def _two_columns(buttons):
@@ -209,21 +210,14 @@ def admin_profile_card(profile, current, timezone, *, has_history=None):
 
 
 def payment_card(ticket):
-    selected = catalog.NETWORK_BY_CODE.get(ticket.demo_network)
+    selected = catalog.NETWORK_BY_CODE.get(ticket.payment_network)
     text = (
-        f"<b>USDT · ДЕМО</b>\nЗаказ №{ticket.id:04d}\n\n"
-        "Выберите сеть, чтобы проверить сценарий оплаты.\nДеньги не переводятся, реквизитов нет.\n\n"
-        f"<b>Стоимость сопровождения:</b> {ticket.price_label}"
+        f"<b>Выбор сети USDT</b>\nЗаказ №{ticket.id:04d} · {ticket.price_label}\n\n"
+        "Укажите сеть, через которую хотите оплатить заказ. "
+        "Оператор подтвердит доступность и пришлёт реквизиты в переписке заказа."
     )
     if selected:
-        text += (
-            f"\n\nВыбран пример: <b>{escape(selected.title)}</b> · {catalog.NETWORK_GROUPS[selected.group]}"
-        )
-    if ticket.status not in OPEN_STATUSES:
-        text += (
-            "\n\nЗаказ закрыт. Сохранён только прошлый выбор."
-        )
-        return text, ui.Keyboard([[ui.action("← К заказу", f"c:view:{ticket.id}")]])
+        text += f"\n\nВаш выбор · <b>{escape(selected.payment_label)}</b>"
     rows = [
         [
             ui.action("TRON · TRC20", f"c:network:{ticket.id}:usdt_tron"),
@@ -231,46 +225,52 @@ def payment_card(ticket):
         ],
         [ui.action("Ethereum · ERC20", f"c:network:{ticket.id}:usdt_ethereum")],
         [
-            ui.action("Другие сети USDT", f"c:networks:{ticket.id}:usdt:0"),
+            ui.action("Все сети USDT", f"c:networks:{ticket.id}:usdt:0"),
             ui.action("USDT0", f"c:networks:{ticket.id}:usdt0:0"),
         ],
-        [ui.action("Другие версии токена", f"c:networks:{ticket.id}:bridged:0")],
-        [ui.action("← К заказу", f"c:view:{ticket.id}")],
+        [ui.action("Другие токены", f"c:networks:{ticket.id}:bridged:0")],
     ]
+    if selected:
+        rows.append([ui.action("Сбросить выбор", f"c:network_clear:{ticket.id}")])
+    rows.append([ui.action("← К заказу", f"c:view:{ticket.id}")])
     return text, ui.Keyboard(rows)
 
 
 def network_page(ticket, group, offset):
     networks = [n for n in catalog.NETWORKS if n.group == group]
-    offset = max(0, min(offset, ((len(networks) - 1) // 8) * 8))
-    rows = [[ui.action(n.title, f"c:network:{ticket.id}:{n.code}")] for n in networks[offset : offset + 8]]
+    rows = [
+        [ui.action("BNB · BEP20" if n.code == "bridged_bnb" else n.title, f"c:network:{ticket.id}:{n.code}")]
+        for n in networks[offset : offset + NETWORK_PAGE_SIZE]
+    ]
     navigation = []
     if offset:
-        navigation.append(ui.action("← Назад", f"c:networks:{ticket.id}:{group}:{offset - 8}"))
-    if offset + 8 < len(networks):
-        navigation.append(ui.action("Далее →", f"c:networks:{ticket.id}:{group}:{offset + 8}"))
+        navigation.append(ui.action("Предыдущая", f"c:networks:{ticket.id}:{group}:{offset - NETWORK_PAGE_SIZE}"))
+    if offset + NETWORK_PAGE_SIZE < len(networks):
+        navigation.append(ui.action("Следующая", f"c:networks:{ticket.id}:{group}:{offset + NETWORK_PAGE_SIZE}"))
     if navigation:
         rows.append(navigation)
-    rows.append([ui.action("К вариантам оплаты", f"c:pay:{ticket.id}")])
+    rows.append([ui.action("К выбору сети", f"c:pay:{ticket.id}")])
+    pages = (len(networks) + NETWORK_PAGE_SIZE - 1) // NETWORK_PAGE_SIZE
     text = (
-        f"<b>{catalog.NETWORK_GROUPS[group]} · ДЕМО</b>\n{len(networks)} вариантов\n\n"
-        "Выберите сеть для примера. Переводов здесь нет."
+        f"<b>{catalog.NETWORK_GROUPS[group]}</b> · заказ №{ticket.id:04d}\n"
+        f"Страница {offset // NETWORK_PAGE_SIZE + 1} из {pages}"
     )
     if group == "usdt0":
-        text += "\n\nUSDT0 — отдельная версия токена, не обычный USDT."
+        text += "\n\nВыберите сеть для токена USDT0."
     elif group == "bridged":
-        text += "\n\nЭто отдельные версии токена; прямой выпуск Tether здесь не заявляется."
+        text += "\n\nВыберите сеть для мостовой версии токена."
     return text, ui.Keyboard(rows)
 
 
 def network_selected(ticket, network):
     return (
-        f"<b>Сеть выбрана · ДЕМО</b>\n\nВыбрана сеть <b>{escape(network.title)}</b>.\n"
-        "Выбор сохранён. Это демо: оплата не совершена.",
+        f"<b>Сеть выбрана</b>\nЗаказ №{ticket.id:04d} · {ticket.price_label}\n\n"
+        f"<b>{escape(network.payment_label)}</b>\n"
+        "Оператор увидит ваш выбор в заказе. Дождитесь подтверждения сети, суммы и адреса в переписке.",
         ui.Keyboard(
             [
                 [ui.action("← К заказу", f"c:view:{ticket.id}", "primary")],
-                [ui.action("Выбрать другую сеть", f"c:pay:{ticket.id}")],
+                [ui.action("Сменить сеть", f"c:pay:{ticket.id}")],
             ]
         ),
     )

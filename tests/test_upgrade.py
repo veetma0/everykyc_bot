@@ -165,7 +165,7 @@ async def test_note_can_be_cleared_without_sending_minus_to_customer(env):
     assert len(sent(env, CLIENT)) == before
 
 
-async def test_retired_payment_menu_returns_to_current_order_without_extra_choices(env):
+async def test_payment_menu_returns_to_order_before_operator_accepts(env):
     ticket = await order(env)
     await env.callback(CLIENT, f"c:pay:{ticket.id}")
     screen = last(env, CLIENT)
@@ -175,49 +175,66 @@ async def test_retired_payment_menu_returns_to_current_order_without_extra_choic
     assert not any(method in {"sendInvoice", "createInvoiceLink"} for method, _ in env.request.calls)
 
 
-async def test_retired_network_pages_cannot_restore_old_button_menus(env):
+async def test_network_pages_are_unavailable_before_operator_accepts(env):
     ticket = await order(env)
     for group in catalog.NETWORK_GROUPS:
         for offset in (0, 8, 16):
             await env.callback(CLIENT, f"c:networks:{ticket.id}:{group}:{offset}")
             assert len(buttons(last(env, CLIENT))) == 3
             assert not any(":network" in value for value in callbacks(last(env, CLIENT)))
-    assert env.store.ticket(ticket.id).demo_network is None
+    assert env.store.ticket(ticket.id).payment_network is None
 
 
 @pytest.mark.parametrize("network", ["usdt_tron", "usdt_ton", "usdt0_arbitrum", "bridged_bnb"])
-async def test_retired_network_selection_is_read_only(env, network):
+async def test_network_selection_is_read_only_before_operator_accepts(env, network):
     initial = await order(env)
     await env.callback(CLIENT, f"c:network:{initial.id}:{network}")
     ticket = env.store.ticket(initial.id)
     assert ticket == initial
-    assert ticket.demo_network is None
+    assert ticket.payment_network is None
     assert len(callbacks(last(env, CLIENT))) == 3
 
 
-async def test_other_customer_cannot_view_or_choose_mock_network_for_ticket(env):
+async def test_other_customer_cannot_view_or_choose_network_for_ticket(env):
     ticket = await order(env)
+    ticket = env.store.request_payment(ticket.id, ticket.version, ADMIN)
     for value in (
         f"c:pay:{ticket.id}",
         f"c:networks:{ticket.id}:usdt:0",
         f"c:network:{ticket.id}:usdt_tron",
+        f"c:network_clear:{ticket.id}",
     ):
         await env.callback(OTHER, value)
         assert "недоступен" in last(env, OTHER)["text"]
         assert "$45" not in last(env, OTHER)["text"]
-    assert env.store.ticket(ticket.id).demo_network is None
+    assert env.store.ticket(ticket.id).payment_network is None
 
 
-async def test_mock_selection_cannot_change_closed_ticket_or_unknown_network(env):
+async def test_network_selection_cannot_change_closed_ticket_or_use_unknown_network(env):
     ticket = await order(env)
-    await env.callback(CLIENT, f"c:network:{ticket.id}:not_a_network")
-    assert env.store.ticket(ticket.id).demo_network is None
+    ticket = env.store.request_payment(ticket.id, ticket.version, ADMIN)
+    discussion, _ = env.store.create_ticket(CLIENT, kind="wholesale")
+    env.store.set_customer_focus(CLIENT, discussion.id)
+    for value in (
+        f"c:network:{ticket.id}:not_a_network",
+        f"c:network:{ticket.id}:usdt_ton:extra",
+        f"c:networks:{ticket.id}:unknown:0",
+        f"c:networks:{ticket.id}:usdt:1",
+        f"c:networks:{ticket.id}:usdt:-8",
+        f"c:networks:{ticket.id}:bridged:8",
+        f"c:network_clear:{ticket.id}:extra",
+        "c:pay:99999999999999999999",
+    ):
+        await env.callback(CLIENT, value)
+        assert env.store.customer_focus(CLIENT).id == discussion.id
+        assert env.store.ticket(ticket.id).payment_network is None
     legacy_ticket(env.store, ticket)
     closed = env.store.set_status(ticket.id, ticket.version, "resolved", ADMIN)
     await env.callback(CLIENT, f"c:network:{ticket.id}:usdt_ton")
     latest = env.store.ticket(ticket.id)
     assert latest.status == "resolved" and latest.version == closed.version
-    assert latest.demo_network is None
+    assert latest.payment_network is None
+    assert env.store.customer_focus(CLIENT).id == discussion.id
     assert "выполнен" in last(env, CLIENT)["text"].lower()
     await env.callback(CLIENT, f"c:pay:{ticket.id}")
     assert "выполнен" in last(env, CLIENT)["text"].lower()
@@ -243,15 +260,18 @@ async def test_admin_preview_entry_and_navigation_keep_callback_namespace_read_o
     assert env.store.db.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 0
 
 
-async def test_preview_cannot_create_close_or_change_mock_network_even_for_admin_owned_ticket(env):
+async def test_preview_cannot_create_close_or_change_network_even_for_admin_owned_ticket(env):
     env.store.remember_user(ADMIN, ADMIN, "Оператор", None)
     ticket, _ = env.store.create_ticket(ADMIN, "claude", "armenia", "35")
+    env.store.request_payment(ticket.id, ticket.version, ADMIN)
+    ticket = env.store.set_payment_network(ticket.id, ADMIN, "usdt_tron")
     initial = tuple(env.store.db.execute("SELECT * FROM tickets WHERE id=?", (ticket.id,)).fetchone())
     for value in (
         "p:create",
         "p:order:claude:standard",
         f"p:close:{ticket.id}:{ticket.version}",
         f"p:network:{ticket.id}:usdt_ton",
+        f"p:network_clear:{ticket.id}",
         f"p:write:{ticket.id}",
     ):
         await env.callback(ADMIN, value)
@@ -287,7 +307,7 @@ async def test_preview_ticket_history_and_payment_buttons_remain_preview_scoped(
         await env.callback(ADMIN, value)
         assert "ПРЕДПРОСМОТР" in last(env, ADMIN)["text"]
         assert_preview_navigation(last(env, ADMIN))
-    assert env.store.ticket(ticket.id).demo_network is None
+    assert env.store.ticket(ticket.id).payment_network is None
 
 
 async def test_help_explains_ordering_and_keeps_official_owner_verification_guidance(env):

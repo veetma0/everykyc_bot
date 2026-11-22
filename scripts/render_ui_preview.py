@@ -5,6 +5,7 @@ credentials, customer records, or network requests are used.
 """
 
 from dataclasses import replace
+from html import escape
 import json
 from pathlib import Path
 import sys
@@ -31,6 +32,31 @@ def card(value, route=None, *, customer=False):
 def sample_orders_card(ticket=None):
     tickets = [ticket] if ticket else []
     return card(screens.orders_card(tickets, 0, len(tickets), 1), "c:orders:0")
+
+
+def network_preview(ticket, messages, total):
+    payment = replace(ticket, payment_stage="awaiting_payment")
+    network = catalog.NETWORK_BY_CODE["usdt_tron"]
+    selected = replace(payment, payment_network=network.code)
+    templates = {
+        "chooser": card(screens.payment_card(payment), "c:pay:1"),
+        "chooser_selected": card(screens.payment_card(selected), "c:pay:1"),
+        "confirmation": card(screens.network_selected(selected, network), "c:network:1"),
+        "order_selected": card(ui.customer_ticket(selected, "UTC"), "c:current"),
+        "history_selected": card(ui.history(selected, messages, total, 0, False, "UTC"), "c:history:1:0"),
+    }
+    title = escape(catalog.service_title(ticket.service_code, ticket.plan_code))
+    for panel in templates.values():
+        panel["text"] = (panel["text"].replace(escape(network.payment_label), "{network}")
+                         .replace(ticket.price_label, "{price}").replace(title, "{service}"))
+    pages = {}
+    for group in catalog.NETWORK_GROUPS:
+        size = sum(n.group == group for n in catalog.NETWORKS)
+        for offset in range(0, size, screens.NETWORK_PAGE_SIZE):
+            route = f"c:networks:{ticket.id}:{group}:{offset}"
+            pages[route] = card(screens.network_page(payment, group, offset), route)
+    return {"templates": templates, "pages": pages,
+            "labels": {n.code: escape(n.payment_label) for n in catalog.NETWORKS}}
 
 
 def export_cards():
@@ -89,6 +115,7 @@ def export_cards():
                       "review": review, "working": working, "done": done}
             samples[offer.service] = {name: card(ui.customer_ticket(sample, "UTC"), "c:current")
                                      for name, sample in stages.items()}
+            samples[offer.service]["quote"] = {"service": escape(offer.title), "price": current.price_label}
             sample_messages = [dict(row) for row in history_rows]
             for row in sample_messages:
                 if row["role"] == "user":
@@ -105,6 +132,7 @@ def export_cards():
                 active = sample if sample.status in OPEN_STATUSES else None
                 samples[offer.service]["home"][name] = card(ui.home(catalog.BRAND_NAME, active), "c:home")
             if offer.service == "bybit":
+                networks = network_preview(current, sample_messages, history_total)
                 for name, sample in stages.items():
                     examples[f"admin_ticket:{name}"] = card(ui.admin_ticket(sample))
                     examples[f"admin_details:{name}"] = card(ui.admin_details(sample))
@@ -118,7 +146,7 @@ def export_cards():
         store.close()
     for route, panel in cards.items():
         panel["cover"] = cover_for(route, panel["text"])
-    return {"cards": cards, "samples": samples, "examples": examples,
+    return {"cards": cards, "samples": samples, "examples": examples, "networks": networks,
             "icon_fallbacks": {icon_id: theme.alternative_text(icon_id) for icon_id, _ in theme.NAV_ICONS.values()},
             "order_limit_notice": ui.ORDER_LIMIT_NOTICE,
             "categories": catalog.CATEGORIES,
@@ -182,7 +210,7 @@ footer{padding:0 28px 25px;color:#53636e;font-size:12px;max-width:1500px;margin:
 <main class="frames" id="frames"></main><footer>Ширина 320 и 390 px · светлая и тёмная темы. Оформление приближено к Telegram для проверки длины строк; реальные шрифты, цвета и расположение блоков зависят от устройства. Фирменные эмодзи бирж проверяются в Telegram отдельно. Примеры заказов и переписки работают локально.</footer>
 <script id="data" type="application/json">__DATA__</script>
 <script>
-const data=JSON.parse(document.querySelector('#data').textContent);let route='c:home',state='',service='bybit';
+const data=JSON.parse(document.querySelector('#data').textContent);let route='c:home',state='',service='bybit',selectedNetwork='';
 const notice=document.querySelector('#notice'),screen=document.querySelector('#screen'),stateSelect=document.querySelector('#state'),serviceSelect=document.querySelector('#service'),exampleSelect=document.querySelector('#example');
 document.title=data.brand.short_name+' · предпросмотр Telegram';
 document.querySelector('#preview-title').textContent=data.brand.name;
@@ -206,12 +234,24 @@ for(const [width,dark] of [[320,false],[390,false],[320,true],[390,true]]){
  frame.querySelector('.profile-bio span').textContent=data.brand.short_description;
  frame.querySelector('.description-body').textContent=data.brand.description;
  frame.querySelector('.description-card img').src=data.brand.banner;
- frame.querySelector('.start-button').onclick=()=>{state='';show('x:onboarding:full');notice.textContent='Прочитайте правила и нажмите «Принимаю правила», чтобы открыть каталог.'};
+ frame.querySelector('.start-button').onclick=()=>{state='';selectedNetwork='';show('x:onboarding:full');notice.textContent='Прочитайте правила и нажмите «Принимаю правила», чтобы открыть каталог.'};
  document.querySelector('#frames').append(frame);
+}
+function networkCard(name){
+ const template=data.networks.templates[name];
+ const values={...data.samples[service].quote,network:data.networks.labels[selectedNetwork]};
+ return {...template,text:template.text.replace(/\{(service|price|network)\}/g,(_,key)=>values[key])};
 }
 function currentCard(){
  if(route.startsWith('x:'))return data.examples[route.slice(2)];
  const sample=data.samples[service];
+ if(state==='payment'){
+  if(route==='c:pay:1')return networkCard(selectedNetwork?'chooser_selected':'chooser');
+  if(data.networks.pages[route])return data.networks.pages[route];
+  if(route==='c:network:1:'+selectedNetwork&&selectedNetwork)return networkCard('confirmation');
+  if(selectedNetwork&&(route==='c:current'||route==='c:view:1'||route==='c:chat:1'))return networkCard('order_selected');
+  if(selectedNetwork&&route.startsWith('c:history:'))return networkCard('history_selected');
+ }
  if(route.startsWith('c:history:'))return state==='payment'?sample.payment_history:sample.history_customer;
  if(state){
   if(route==='c:home')return sample.home[state];
@@ -269,6 +309,14 @@ function show(next, extraText=''){
  history.replaceState(null,'','#'+encodeURIComponent(next));
 }
 function navigate(next){notice.textContent='Нажимайте кнопки в любом окне — все темы и размеры обновляются вместе.';if(route.startsWith('x:onboarding:')&&next.startsWith('c:rules:')){show('x:onboarding:'+next.split(':').at(-1));return}if(next.startsWith('c:agree:')||next.startsWith('c:agree_full:')){show(state?'c:home':'c:catalog');notice.textContent='Это только просмотр: согласие не сохраняется.';return}if(next.startsWith('c:rate:')){show('x:review_comment');notice.textContent='Показан пример комментария к оценке. Отзыв не сохраняется.';return}if(next.startsWith('c:history:')){if(route.startsWith('x:')){service='bybit';state=state||'new'}show(next);notice.textContent=`Пример переписки · ${data.services[service]}. Все сообщения вымышлены.`;return}if(next.startsWith('a:history:')){show('x:history_admin');return}
+ if(state==='payment'){
+  if(next==='c:pay:1'||data.networks.pages[next]){show(next);return}
+  if(next==='c:network_clear:1'){selectedNetwork='';show('c:pay:1');return}
+  if(next.startsWith('c:network:1:')){
+   const code=next.slice('c:network:1:'.length);
+   if(Object.hasOwn(data.networks.labels,code)){selectedNetwork=code;show(next);return}
+  }
+ }
  if(next.startsWith('c:order:')){
   const selected=next.split(':')[2];
   if(state && state!=='done'){
@@ -277,13 +325,14 @@ function navigate(next){notice.textContent='Нажимайте кнопки в �
    return;
   }
   service=selected;
+  selectedNetwork='';
   state='new';
   notice.textContent='Показан пример нового заказа.';
   show('c:current');
   return;
  }
  const adminRoutes={'a:home':'admin_home','a:more':'admin_more','a:mode:admin':'admin_home'};if(adminRoutes[next]){show('x:'+adminRoutes[next]);return}if(next.startsWith('a:view:')||next.startsWith('a:next')){show('x:admin_ticket:new');return}if(next.startsWith('a:client:')){show('x:admin_profile');return}if(next.startsWith('a:details:')){show('x:admin_details:working');return}if(next.startsWith('a:status:')){show('x:admin_status:working');return}if(data.cards[next]||next==='c:current'||next.startsWith('c:view:')||next.startsWith('c:chat:')){if(next.startsWith('c:view:')&&!state)state='new';show(next);return}notice.textContent='Это действие не выполняется в локальном макете. Нужный пример состояния можно открыть в списке «Другие экраны».';}
-document.querySelector('#view-chat').onclick=()=>navigate('c:home');document.querySelector('#view-brand').onclick=()=>{show('b:profile');notice.textContent='Пример оформления профиля перед первым запуском. Баннер и тексты показаны из файлов проекта; это не подтверждение публикации.'};screen.onchange=()=>navigate(screen.value);exampleSelect.onchange=()=>{if(exampleSelect.value){service='bybit';show(exampleSelect.value);notice.textContent='Локальный пример Bybit: данные вымышлены, действий в Telegram нет.'}};stateSelect.onchange=()=>{state=stateSelect.value;notice.textContent=state?'Показан только образец состояния заказа. Реальных заказов и платежей нет.':'Показан интерфейс без активного заказа.';show(state?'c:current':'c:home')};serviceSelect.onchange=()=>{service=serviceSelect.value;show(state?'c:current':`c:service:${service}`)};document.querySelector('#reset').onclick=()=>{state='';service='bybit';navigate('c:home')};
+document.querySelector('#view-chat').onclick=()=>navigate('c:home');document.querySelector('#view-brand').onclick=()=>{show('b:profile');notice.textContent='Пример оформления профиля перед первым запуском. Баннер и тексты показаны из файлов проекта; это не подтверждение публикации.'};screen.onchange=()=>navigate(screen.value);exampleSelect.onchange=()=>{if(exampleSelect.value){if(service!=='bybit')selectedNetwork='';service='bybit';show(exampleSelect.value);notice.textContent='Локальный пример Bybit: данные вымышлены, действий в Telegram нет.'}};stateSelect.onchange=()=>{selectedNetwork='';state=stateSelect.value;notice.textContent=state?'Показан только образец состояния заказа. Реальных заказов и платежей нет.':'Показан интерфейс без активного заказа.';show(state?'c:current':'c:home')};serviceSelect.onchange=()=>{selectedNetwork='';service=serviceSelect.value;show(state?'c:current':`c:service:${service}`)};document.querySelector('#reset').onclick=()=>{selectedNetwork='';state='';service='bybit';navigate('c:home')};
 const params=new URLSearchParams(location.search);if(data.samples[params.get('service')])service=params.get('service');if(['new','payment','rejected','review','working','done'].includes(params.get('state')))state=params.get('state');let initial=decodeURIComponent(location.hash.slice(1));
 if(initial==='c:sections')initial='c:catalog';
 show(initial==='b:profile'||data.cards[initial]||data.examples[initial.slice(2)]||initial.startsWith('c:history:')||(initial==='c:current'&&state)?initial:'c:home');

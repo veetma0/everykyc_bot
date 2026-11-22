@@ -22,7 +22,7 @@ INSTRUCTIONS = (
 PRIVACY = (
     "<b>🔒 Какие данные хранит бот</b>\n\n"
     "Telegram ID, имя и username, выбранную услугу, сообщения, статусы и заметки оператора. "
-    "Переписки по сделке и опту хранятся отдельно. Сохраняются выбранная переписка, "
+    "Переписки по сделке и опту хранятся отдельно. Сохраняются выбранная сеть USDT, выбранная переписка, "
     "версия правил, время согласия, оценки и комментарии к отзывам. "
     "Если вы пришли по ссылке с меткой, сохраняется её источник.\n\n"
     "Фото и файлы из переписки передаются оператору. Бот сохраняет текст и идентификатор файла Telegram; "
@@ -88,7 +88,7 @@ def home(title: str, ticket: Ticket | None):
                     hint = "Откройте заказ и пришлите новый чек."
                 else:
                     resume = "Перейти к оплате"
-                    hint = "Оператор пришлёт реквизиты в переписку заказа. После оплаты отправьте туда чек."
+                    hint = "Откройте оплату, чтобы выбрать сеть USDT или посмотреть реквизиты заказа."
             elif ticket.status == "new" and ticket.payment_stage == "review":
                 hint = "Оператор проверяет чек. Ответ придёт в переписку заказа."
             text = (
@@ -119,6 +119,11 @@ def prepare():
     )
 
 
+def payment_network_line(ticket: Ticket):
+    network = catalog.NETWORK_BY_CODE.get(ticket.payment_network)
+    return f"\nВыбранная сеть · <b>{escape(network.payment_label)}</b>" if network else ""
+
+
 def customer_ticket(ticket: Ticket, timezone: str):
     if getattr(ticket, "kind", "order") == "wholesale":
         active = ticket.status in OPEN_STATUSES
@@ -147,7 +152,7 @@ def customer_ticket(ticket: Ticket, timezone: str):
     text = (
         f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
         f" · {ticket.price_label}\n"
-        f"Заказ №{ticket.id:04d}\n\n"
+        f"Заказ №{ticket.id:04d}{payment_network_line(ticket)}\n\n"
         f"<b>{ticket_status(ticket)}</b>\n{hint}"
     )
     rows = []
@@ -163,6 +168,9 @@ def customer_ticket(ticket: Ticket, timezone: str):
 def customer_ticket_navigation(ticket: Ticket):
     label = "Чат и реквизиты" if ticket.awaiting_first_payment else "Переписка"
     rows = [[action(label, f"c:history:{ticket.id}:0")]]
+    if ticket.awaiting_first_payment:
+        choose = "Сменить сеть" if ticket.payment_network else "Выбрать сеть"
+        rows.insert(0, [action(choose, f"c:pay:{ticket.id}", None if ticket.payment_network else "primary")])
     if can_customer_cancel(ticket):
         rows.append([action("Отменить заказ", f"c:cancel:{ticket.id}:{ticket.version}")])
     rows.append([action("Главная", "c:home")])
@@ -177,7 +185,7 @@ def payment_request(ticket: Ticket):
     if ticket.has_payment_proof:
         return (
             f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
-            f" · {ticket.price_label}\nЗаказ №{ticket.id:04d}\n\n"
+            f" · {ticket.price_label}\nЗаказ №{ticket.id:04d}{payment_network_line(ticket)}\n\n"
             "<b>🧾 Нужен другой чек</b>\n"
             "По предыдущему чеку оператор не смог подтвердить оплату.\n\n"
             "Пришлите новый скриншот, файл или ссылку на чек в этот чат. "
@@ -185,11 +193,13 @@ def payment_request(ticket: Ticket):
             "Повторно платить без согласования с оператором не нужно.",
             Keyboard(customer_ticket_navigation(ticket)),
         )
+    network_hint = "" if ticket.payment_network else "Для оплаты в USDT укажите сеть. "
     return (
         f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
-        f" · {ticket.price_label}\nЗаказ №{ticket.id:04d}\n\n"
+        f" · {ticket.price_label}\nЗаказ №{ticket.id:04d}{payment_network_line(ticket)}\n\n"
         "<b>💳 Ожидает оплаты</b>\n"
-        "Оператор принял заказ. Дождитесь реквизитов в этом чате и согласуйте условия до оплаты.\n\n"
+        f"Оператор принял заказ. {network_hint}"
+        "Дождитесь реквизитов и итоговой суммы в переписке заказа.\n\n"
         "После оплаты пришлите сюда фото, файл или ссылку на чек. "
         "Скройте лишние личные данные. Оператор проверит оплату.\n\n"
         "После отправки чека отменить заказ сможет только оператор.",
@@ -256,7 +266,7 @@ def admin_ticket(ticket: Ticket, snippet: str | None = None, *, proof_ready=Fals
     text = f"<b>{conversation_title(ticket)} · {escape(ticket.display_name)}</b>\n"
     if not wholesale:
         text += f"{catalog.service_title(ticket.service_code, ticket.plan_code)} · {ticket.price_label}\n"
-    text += ticket_status(ticket)
+    text += ticket_status(ticket) + payment_network_line(ticket)
     if snippet:
         excerpt = clip_text(snippet, 420)
         text += f"\n\n{escape(excerpt)}"
@@ -303,8 +313,8 @@ def admin_details(ticket: Ticket):
     )
     if getattr(ticket, "kind", "order") != "wholesale":
         text += f"{catalog.service_title(ticket.service_code, ticket.plan_code)} · {ticket.price_label}\n"
-    text += ticket_status(ticket)
-    if ticket.demo_network:
+    text += ticket_status(ticket) + payment_network_line(ticket)
+    if ticket.demo_network and not ticket.payment_network:
         network = catalog.NETWORK_BY_CODE.get(ticket.demo_network)
         text += (
             f"\n\nUSDT · демо: {escape(network.title) if network else 'сеть выбрана'}"
@@ -387,7 +397,8 @@ def history(ticket: Ticket, rows, total: int, page: int, admin: bool, timezone: 
     title = "реквизиты и переписка" if payment else "переписка"
     texts = [f"<b>{conversation_title(ticket)} · {title}</b>"]
     if payment and page == 0:
-        texts.append("Реквизиты для оплаты оператор отправляет здесь после согласования суммы.")
+        texts.append("Реквизиты для оплаты оператор отправляет здесь после согласования суммы."
+                     + payment_network_line(ticket))
     if total > 4:
         texts.append(f"Страница {page + 1} из {(total + 3) // 4}" + (" · последние сообщения" if page == 0 else ""))
     elif not rows:

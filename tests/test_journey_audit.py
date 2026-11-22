@@ -121,7 +121,7 @@ async def test_complete_priced_order_manual_payment_reply_and_completion(env):
     assert followup.price_usd == "50.00" and followup.payment_stage == "not_requested"
 
 
-async def test_every_retired_network_button_returns_to_current_order_without_network_controls(env):
+async def test_every_network_button_returns_to_order_before_operator_accepts(env):
     ticket = await order(env)
     before = env.store.ticket(ticket.id)
     for network in catalog.NETWORKS:

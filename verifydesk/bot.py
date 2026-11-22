@@ -28,6 +28,7 @@ from . import acquisition, catalog, rich, rules, screens, theme, ui
 
 log = logging.getLogger(__name__)
 MAX_TEXT = 2400
+CUSTOMER_NETWORK_ACTIONS = {"pay", "networks", "network", "network_clear"}
 
 
 def contains_verification_link(message):
@@ -284,9 +285,9 @@ class Desk:
         parts = str(query.data).split(":") if query else []
         ticket = None
         uid = update.effective_user.id
-        if len(parts) > 2 and parts[0] == "c" and parts[1] in {
+        if len(parts) > 2 and parts[0] == "c" and parts[1] in CUSTOMER_NETWORK_ACTIONS | {
             "chat", "view", "details", "history", "message", "write", "requisites", "proof_prompt",
-        } and parts[2].isdigit():
+        } and parts[2].isascii() and parts[2].isdecimal():
             ticket = self.authorized_ticket(int(parts[2]), uid)
         elif len(parts) > 1 and parts[:2] == ["c", "order"]:
             ticket = self.store.for_user(uid, active_only=True)
@@ -304,7 +305,7 @@ class Desk:
                 for button in row:
                     target = str(button.callback_data).split(":")
                     if (len(target) > 2 and target[0] == "c"
-                            and target[1] in {"history", "view", "cancel", "close", "details"}
+                            and target[1] in {"history", "view", "cancel", "close", "details", "pay"}
                             and target[2] == str(ticket.id)):
                         visible_ticket = True
         if ticket and visible_ticket:
@@ -596,6 +597,8 @@ class Desk:
         return delivered
 
     def authorized_ticket(self, ticket_id, uid, admin=False):
+        if not 0 < ticket_id <= 2**63 - 1:
+            return None
         ticket = self.store.ticket(ticket_id)
         if not ticket:
             return None
@@ -696,7 +699,7 @@ class Desk:
             await self.screen(update, context, "Доступ к кабинету оператора закрыт.")
             return
         try:
-            if parts[0] in {"a", "c"}:
+            if parts[0] in {"a", "c"} and not (parts[0] == "c" and parts[1] in CUSTOMER_NETWORK_ACTIONS):
                 if parts[1] in {"send_draft", "discard_draft"}:
                     self.store.clear_input(uid)
                     await self.screen(update, context, "Теперь сообщения отправляются прямо в чат. Старый черновик не отправлен.", self.recovery_keyboard(parts[0] == "a"))
@@ -726,13 +729,16 @@ class Desk:
         if verb in {"service", "offer", "order", "guide"} and parts[2] in catalog.RETIRED_SERVICES:
             await self.screen(update, context, *screens.unavailable_service())
             return
-        if preview and verb in {"create", "order", "close", "network", "write", "proof_prompt", "send_draft", "wholesale", "chat", "rate", "review_skip"}:
+        if preview and verb in {"create", "order", "close", "network", "network_clear", "write", "proof_prompt", "send_draft", "wholesale", "chat", "rate", "review_skip"}:
             await self.screen(
                 update,
                 context,
                 "В предпросмотре заказы и сообщения не отправляются, выбор не сохраняется.",
                 ui.Keyboard([[ui.action("Каталог услуг", "c:catalog")]]),
             )
+            return
+        if verb in CUSTOMER_NETWORK_ACTIONS:
+            await self.customer_network_callback(update, context, uid, parts, preview)
             return
         if not preview and verb not in {"rate", "review_skip"}:
             self.finish_pending_review(uid)
@@ -832,15 +838,6 @@ class Desk:
             else:
                 rows.append([ui.action("‹ Главная", "c:home")])
             await self.screen(update, context, screens.guide(service), ui.Keyboard(rows))
-        elif verb in {"pay", "networks", "network"}:
-            ticket = self.authorized_ticket(int(parts[2]), uid)
-            if not ticket:
-                await self.screen(update, context, "Этот заказ недоступен.", self.recovery_keyboard())
-                return
-            if ticket.status in OPEN_STATUSES and not preview:
-                self.store.set_customer_focus(uid, ticket.id)
-            # Retired network demos must not bring the old payment menus back.
-            await self.screen(update, context, *ui.customer_ticket(ticket, self.config.timezone))
         elif verb == "prepare":
             current = self.store.for_user(uid, active_only=True)
             if current and not preview:
@@ -919,6 +916,43 @@ class Desk:
                 await self.screen(update, context, *ui.customer_ticket(ticket, self.config.timezone))
         else:
             raise ValueError("Unknown customer action")
+
+    async def customer_network_callback(self, update, context, uid, parts, preview):
+        verb = parts[1]
+        if not re.fullmatch(r"[1-9][0-9]*", parts[2]):
+            raise ValueError("Invalid ticket number")
+        ticket = self.authorized_ticket(int(parts[2]), uid)
+        if not ticket:
+            await self.screen(update, context, "Этот заказ недоступен.", self.recovery_keyboard())
+            return
+        if not ticket.awaiting_first_payment:
+            await self.screen(update, context, *ui.customer_ticket(ticket, self.config.timezone))
+            return
+        if verb == "networks" and len(parts) == 5:
+            group, page_start = parts[3:]
+            if group not in catalog.NETWORK_GROUPS or not page_start.isascii() or not page_start.isdecimal():
+                raise ValueError("Unknown network page")
+            offset = int(page_start)
+            group_size = sum(network.group == group for network in catalog.NETWORKS)
+            if offset >= group_size or offset % screens.NETWORK_PAGE_SIZE:
+                raise ValueError("Unknown network page")
+            card = screens.network_page(ticket, group, offset)
+        elif verb == "network" and len(parts) == 4:
+            network = catalog.NETWORK_BY_CODE[parts[3]]
+            ticket = self.store.set_payment_network(ticket.id, uid, network.code)
+            card = screens.network_selected(ticket, network)
+        elif verb in {"pay", "network_clear"} and len(parts) == 3:
+            if verb == "network_clear":
+                ticket = self.store.set_payment_network(ticket.id, uid, None)
+            card = screens.payment_card(ticket)
+        else:
+            raise ValueError("Unknown network action")
+        if not preview:
+            self.store.set_customer_focus(uid, ticket.id)
+            self.store.clear_input(uid)
+            context.user_data.pop("order_search_until", None)
+            self.finish_pending_review(uid)
+        await self.screen(update, context, *card)
 
     async def admin_callback(self, update, context, uid, parts):
         verb = parts[1]
@@ -1349,7 +1383,7 @@ class Desk:
         image_sent = await self.send_proof_image(context.bot, update.effective_user.id, ticket, proof)
         text = (
             f"<b>🔎 Проверка оплаты · заказ №{ticket.id:04d}</b>\n"
-            f"{escape(ticket.display_name)} · {ticket.price_label}\n"
+            f"{escape(ticket.display_name)} · {ticket.price_label}{ui.payment_network_line(ticket)}\n"
             f"Подтверждение {offset + 1} из {len(proofs)}\n\n"
             f"{escape(proof['body'])}\n\n"
             "Проверьте подтверждение. Только после вашего решения заказ перейдёт в работу."

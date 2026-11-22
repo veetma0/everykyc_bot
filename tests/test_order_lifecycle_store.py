@@ -1,6 +1,7 @@
 """Manual payment approval gates work without rewriting old orders."""
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 import sqlite3
 from threading import Barrier
 
@@ -23,6 +24,73 @@ def payment_review(store, uid=101):
     order = awaiting_payment(store, uid)
     store.submit_payment_proof(order.id, "https://example.com/test-receipt", uid, uid, 1)
     return store.ticket(order.id)
+
+
+def test_payment_network_can_be_selected_changed_or_cleared_without_other_order_changes(tmp_path):
+    path = tmp_path / "desk.sqlite3"
+    store = Store(path)
+    try:
+        original = awaiting_payment(store)
+        for network in ("usdt_tron", "usdt_ton", None, None, "bridged_bnb"):
+            selected = store.set_payment_network(original.id, original.user_id, network)
+            assert selected == replace(original, payment_network=network)
+            writes = store.db.total_changes
+            assert store.set_payment_network(original.id, original.user_id, network) == selected
+            assert store.db.total_changes == writes
+        assert store.queue_count() == 0
+        assert store.payment_proofs(original.id) == []
+    finally:
+        store.close()
+    reopened = Store(path)
+    try:
+        assert reopened.ticket(original.id) == selected
+    finally:
+        reopened.close()
+
+
+def test_payment_network_requires_valid_code_owner_and_first_unpaid_stage(store):
+    order = create_order(store)
+    with pytest.raises(StaleTicket):
+        store.set_payment_network(order.id, 101, "usdt_tron")
+    order = store.request_payment(order.id, order.version, 42)
+    for owner, network, error in [(102, "usdt_tron", StaleTicket), (102, None, StaleTicket),
+                                  (101, "typo", ValueError)]:
+        with pytest.raises(error):
+            store.set_payment_network(order.id, owner, network)
+    assert store.ticket(order.id) == order
+    store.set_payment_network(order.id, 101, "usdt_tron")
+    store.submit_payment_proof(order.id, "Чек", 101, 101, 1)
+    review = store.ticket(order.id)
+    with pytest.raises(StaleTicket):
+        store.set_payment_network(order.id, 101, "usdt_ton")
+    rejected = store.reject_payment(order.id, review.version, 42)
+    with pytest.raises(StaleTicket):
+        store.set_payment_network(rejected.id, 101, None)
+    closed = store.set_status(rejected.id, rejected.version, "cancelled", 42)
+    with pytest.raises(StaleTicket):
+        store.set_payment_network(closed.id, 101, "usdt_ton")
+    assert store.ticket(closed.id).payment_network == "usdt_tron"
+    other, _ = store.create_ticket(101, kind="wholesale")
+    with pytest.raises(StaleTicket):
+        store.set_payment_network(other.id, 101, "usdt_tron")
+
+
+def test_old_demo_selection_is_preserved_separately_when_payment_network_is_added(tmp_path):
+    path = tmp_path / "desk.sqlite3"
+    old = Store(path)
+    try:
+        ticket = awaiting_payment(old)
+        old.set_demo_network(ticket.id, "usdt_ton")
+        old.db.execute("ALTER TABLE tickets DROP COLUMN payment_network")
+    finally:
+        old.close()
+    migrated = Store(path)
+    try:
+        assert migrated.ticket(ticket.id).payment_network is None
+        selected = migrated.set_payment_network(ticket.id, ticket.user_id, "usdt_tron")
+        assert (selected.demo_network, selected.payment_network) == ("usdt_ton", "usdt_tron")
+    finally:
+        migrated.close()
 
 
 def test_order_follows_manual_payment_then_work_and_completion(store):

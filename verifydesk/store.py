@@ -9,7 +9,7 @@ import time
 import unicodedata
 
 from .acquisition import SOURCES
-from .catalog import dollars
+from .catalog import NETWORK_BY_CODE, dollars
 
 
 OPEN_STATUSES = ("new", "in_progress", "waiting_user")
@@ -61,6 +61,7 @@ class Ticket:
     has_payment_proof: bool = False
     kind: str = "order"
     price_from: bool = False
+    payment_network: str | None = None
 
     @property
     def price_label(self) -> str:
@@ -257,6 +258,7 @@ class Store:
                 "price_usd": "TEXT",
                 "price_from": "INTEGER NOT NULL DEFAULT 0 CHECK(price_from IN (0,1))",
                 "demo_network": "TEXT",
+                "payment_network": "TEXT",
                 "waiting_since": "REAL NOT NULL DEFAULT 0",
                 "payment_stage": "TEXT NOT NULL DEFAULT 'legacy'",
             },
@@ -404,7 +406,7 @@ class Store:
         row = self.db.execute(
             """SELECT t.id,t.user_id,u.chat_id,u.display_name,u.username,t.status,
             t.version,t.created_at,t.updated_at,t.service_code,t.plan_code,t.price_usd,t.demo_network,t.waiting_since,
-            t.payment_stage,t.kind,t.price_from,
+            t.payment_stage,t.kind,t.price_from,t.payment_network,
             EXISTS(SELECT 1 FROM payment_proofs p JOIN messages pm ON pm.id=p.message_id
                 WHERE pm.ticket_id=t.id) has_payment_proof,
             (SELECT COUNT(*) FROM messages m WHERE m.ticket_id=t.id AND m.role='user' AND m.id>t.last_read_id) unread
@@ -712,6 +714,20 @@ class Store:
                 "UPDATE tickets SET demo_network=?,updated_at=? WHERE id=?",
                 (network_code, time.time(), ticket_id),
             )
+            return self.ticket(ticket_id)
+
+    def set_payment_network(self, ticket_id: int, user_id: int, network_code: str | None) -> Ticket:
+        self._positive_id(user_id)
+        if network_code is not None and network_code not in NETWORK_BY_CODE:
+            raise ValueError("Неизвестная сеть USDT.")
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            ticket = self.ticket(ticket_id)
+            if not ticket or ticket.user_id != user_id or not ticket.awaiting_first_payment:
+                raise StaleTicket("Выбор сети для этого заказа сейчас недоступен.")
+            if ticket.payment_network == network_code:
+                return ticket
+            self.db.execute("UPDATE tickets SET payment_network=? WHERE id=?", (network_code, ticket_id))
             return self.ticket(ticket_id)
 
     def page(self, scope: str, offset: int, limit: int = 8) -> tuple[list[Ticket], int]:

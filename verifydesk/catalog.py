@@ -1,4 +1,4 @@
-"""Service offers and non-payable payment previews. No wallet addresses or invoices."""
+"""Service offers and the USDT network choices available to request in an order."""
 
 from dataclasses import dataclass
 from decimal import Decimal
@@ -130,6 +130,11 @@ class Network:
     title: str
     group: str
 
+    @property
+    def payment_label(self):
+        token = {"usdt": "USDT", "usdt0": "USDT0", "bridged": "USDT (мост)"}[self.group]
+        return f"{token} · {self.title}"
+
 
 NETWORKS = (
     tuple(
@@ -181,7 +186,7 @@ NETWORKS = (
     + (Network("bridged_bnb", "BNB Smart Chain · BEP20", "bridged"),)
 )
 NETWORK_BY_CODE = {network.code: network for network in NETWORKS}
-NETWORK_GROUPS = {"usdt": "USD₮ · прямой выпуск", "usdt0": "USDT0", "bridged": "Другие версии токена"}
+NETWORK_GROUPS = {"usdt": "Сети USDT", "usdt0": "Сети USDT0", "bridged": "Другие версии токена"}
 
 BRAND_NAME = "EVERYKYC"
 PROFILE_NAME = "KYC и верификация · EVERYKYC"
