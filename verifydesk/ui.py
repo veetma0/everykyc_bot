@@ -80,14 +80,24 @@ def home(title: str, ticket: Ticket | None):
             )
             resume = "Открыть чат"
         else:
+            resume = "Продолжить заказ"
+            hint = "Откройте заказ, чтобы продолжить переписку с оператором."
+            if ticket.status == "new" and ticket.payment_stage == "awaiting_payment":
+                if ticket.has_payment_proof:
+                    resume = "Заменить чек"
+                    hint = "Откройте заказ и пришлите новый чек."
+                else:
+                    resume = "Перейти к оплате"
+                    hint = "Оператор пришлёт реквизиты в переписку заказа. После оплаты отправьте туда чек."
+            elif ticket.status == "new" and ticket.payment_stage == "review":
+                hint = "Оператор проверяет чек. Ответ придёт в переписку заказа."
             text = (
                 f"<b>{escape(title)} · Ваш заказ</b>\n\n"
                 f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
-                f" · {catalog.dollars(ticket.price_usd)}\n"
+                f" · {ticket.price_label}\n"
                 f"Заказ №{ticket.id:04d} · {ticket_status(ticket)}\n\n"
-                "Откройте заказ, чтобы продолжить переписку с оператором."
+                f"{hint}"
             )
-            resume = "Продолжить заказ"
         rows = [
             [action(resume, f"c:chat:{ticket.id}", "primary")],
             [action("Каталог", "c:catalog"), action("История", "c:profile")],
@@ -136,7 +146,7 @@ def customer_ticket(ticket: Ticket, timezone: str):
         hint = "Подтверждение оплаты отправлено оператору. Ожидайте его ответа."
     text = (
         f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
-        f" · {catalog.dollars(ticket.price_usd)}\n"
+        f" · {ticket.price_label}\n"
         f"Заказ №{ticket.id:04d}\n\n"
         f"<b>{ticket_status(ticket)}</b>\n{hint}"
     )
@@ -151,7 +161,8 @@ def customer_ticket(ticket: Ticket, timezone: str):
 
 
 def customer_ticket_navigation(ticket: Ticket):
-    rows = [[action("Переписка", f"c:history:{ticket.id}:0")]]
+    label = "Чат и реквизиты" if ticket.awaiting_first_payment else "Переписка"
+    rows = [[action(label, f"c:history:{ticket.id}:0")]]
     if can_customer_cancel(ticket):
         rows.append([action("Отменить заказ", f"c:cancel:{ticket.id}:{ticket.version}")])
     rows.append([action("Главная", "c:home")])
@@ -166,7 +177,7 @@ def payment_request(ticket: Ticket):
     if ticket.has_payment_proof:
         return (
             f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
-            f" · {catalog.dollars(ticket.price_usd)}\nЗаказ №{ticket.id:04d}\n\n"
+            f" · {ticket.price_label}\nЗаказ №{ticket.id:04d}\n\n"
             "<b>🧾 Нужен другой чек</b>\n"
             "По предыдущему чеку оператор не смог подтвердить оплату.\n\n"
             "Пришлите новый скриншот, файл или ссылку на чек в этот чат. "
@@ -176,7 +187,7 @@ def payment_request(ticket: Ticket):
         )
     return (
         f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
-        f" · {catalog.dollars(ticket.price_usd)}\nЗаказ №{ticket.id:04d}\n\n"
+        f" · {ticket.price_label}\nЗаказ №{ticket.id:04d}\n\n"
         "<b>💳 Ожидает оплаты</b>\n"
         "Оператор принял заказ. Дождитесь реквизитов в этом чате и согласуйте условия до оплаты.\n\n"
         "После оплаты пришлите сюда фото, файл или ссылку на чек. "
@@ -244,7 +255,7 @@ def admin_ticket(ticket: Ticket, snippet: str | None = None, *, proof_ready=Fals
     wholesale = getattr(ticket, "kind", "order") == "wholesale"
     text = f"<b>{conversation_title(ticket)} · {escape(ticket.display_name)}</b>\n"
     if not wholesale:
-        text += f"{catalog.service_title(ticket.service_code, ticket.plan_code)} · {catalog.dollars(ticket.price_usd)}\n"
+        text += f"{catalog.service_title(ticket.service_code, ticket.plan_code)} · {ticket.price_label}\n"
     text += ticket_status(ticket)
     if snippet:
         excerpt = clip_text(snippet, 420)
@@ -291,7 +302,7 @@ def admin_details(ticket: Ticket):
         f"{escape(ticket.display_name)}\n"
     )
     if getattr(ticket, "kind", "order") != "wholesale":
-        text += f"{catalog.service_title(ticket.service_code, ticket.plan_code)} · {catalog.dollars(ticket.price_usd)}\n"
+        text += f"{catalog.service_title(ticket.service_code, ticket.plan_code)} · {ticket.price_label}\n"
     text += ticket_status(ticket)
     if ticket.demo_network:
         network = catalog.NETWORK_BY_CODE.get(ticket.demo_network)
@@ -372,7 +383,11 @@ def status_menu(ticket: Ticket):
 
 def history(ticket: Ticket, rows, total: int, page: int, admin: bool, timezone: str):
     prefix = "a" if admin else "c"
-    texts = [f"<b>{conversation_title(ticket)} · переписка</b>"]
+    payment = not admin and ticket.awaiting_first_payment
+    title = "реквизиты и переписка" if payment else "переписка"
+    texts = [f"<b>{conversation_title(ticket)} · {title}</b>"]
+    if payment and page == 0:
+        texts.append("Реквизиты для оплаты оператор отправляет здесь после согласования суммы.")
     if total > 4:
         texts.append(f"Страница {page + 1} из {(total + 3) // 4}" + (" · последние сообщения" if page == 0 else ""))
     elif not rows:

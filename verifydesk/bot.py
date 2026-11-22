@@ -379,6 +379,7 @@ class Desk:
             try:
                 message = await self.panels.show(
                     context.bot, chat_id, source, cover, text, keyboard, use_rich=use_rich,
+                    embed_buttons=not full_rules,
                 )
                 break
             except BadRequest as exc:
@@ -795,7 +796,8 @@ class Desk:
                 await self.screen(update, context, *screens.offer_card(selected), route=f"c:offer:{selected.service}")
                 return
             ticket, created = self.store.create_ticket(
-                uid, selected.service, selected.plan, None if selected.demo else selected.price_usd
+                uid, selected.service, selected.plan, None if selected.demo else selected.price_usd,
+                price_from=selected.price_from,
             )
             if not created and (ticket.service_code, ticket.plan_code) != (selected.service, selected.plan):
                 text, keyboard = self.customer_home(uid)
@@ -872,7 +874,9 @@ class Desk:
             if not ticket:
                 await self.screen(update, context, "Этот заказ недоступен.", self.recovery_keyboard())
                 return
-            if verb in {"proof_prompt", "write", "requisites"}:
+            if verb == "requisites" and ticket.awaiting_first_payment:
+                await self.show_history(update, context, ticket, 0, False, preview=preview)
+            elif verb in {"proof_prompt", "write", "requisites"}:
                 if ticket.status in OPEN_STATUSES and not preview:
                     self.store.set_customer_focus(uid, ticket.id)
                 await self.screen(update, context, *ui.customer_ticket(ticket, self.config.timezone))
@@ -1345,7 +1349,7 @@ class Desk:
         image_sent = await self.send_proof_image(context.bot, update.effective_user.id, ticket, proof)
         text = (
             f"<b>🔎 Проверка оплаты · заказ №{ticket.id:04d}</b>\n"
-            f"{escape(ticket.display_name)} · {catalog.dollars(ticket.price_usd)}\n"
+            f"{escape(ticket.display_name)} · {ticket.price_label}\n"
             f"Подтверждение {offset + 1} из {len(proofs)}\n\n"
             f"{escape(proof['body'])}\n\n"
             "Проверьте подтверждение. Только после вашего решения заказ перейдёт в работу."

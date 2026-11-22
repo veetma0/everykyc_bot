@@ -1,5 +1,7 @@
 """Expanded prices, navigation, historical orders, and mandatory rules."""
 
+from dataclasses import replace
+
 import pytest
 
 from verifydesk import catalog, rich, rules, screens, ui
@@ -67,10 +69,14 @@ async def test_each_category_exposes_services_and_current_prices(env, category):
             assert (catalog.offer_price(selected) if selected.available else "⛔") in button["text"]
             assert ui.text_units(button["text"]) <= 24
             seen.append(selected.service)
+        navigation = [(b["text"], b["callback_data"]) for row in card["reply_markup"]["inline_keyboard"]
+                      for b in row if b["callback_data"].startswith("c:category:")]
+        expected = []
         if page:
-            assert f"c:category:{category}:{page - 1}" in callbacks(card)
+            expected.append(("Предыдущая", f"c:category:{category}:{page - 1}"))
         if (page + 1) * size < len(offers):
-            assert f"c:category:{category}:{page + 1}" in callbacks(card)
+            expected.append(("Следующая", f"c:category:{category}:{page + 1}"))
+        assert navigation == expected
     assert seen == [offer.service for offer in offers]
 
 
@@ -89,8 +95,7 @@ def test_catalog_opens_with_the_six_sections_and_home_only():
 def test_category_page_controls_fit_the_narrow_rich_panel():
     _, keyboard = screens.category_card("exchanges", 1)
     page_rows = [[b.callback_data for b in row] for _, row in rich.layout_rows(keyboard.inline_keyboard)]
-    assert page_rows[-2] == ["c:category:exchanges:0", "c:category:exchanges:2"]
-    assert page_rows[-1] == ["c:catalog"]
+    assert page_rows[-3:] == [["c:category:exchanges:0"], ["c:category:exchanges:2"], ["c:catalog"]]
     assert sum(data.startswith("c:service:") for row in page_rows for data in row) == 5
 
 
@@ -204,6 +209,23 @@ async def test_every_active_service_creates_correctly_priced_order_and_notifies_
     assert env.store.profile(CLIENT).total_tickets == 1
     await env.callback(CLIENT, f"c:guide:{service}")
     assert selected.title in last(env, CLIENT)["text"]
+
+
+async def test_order_keeps_quoted_starting_price_on_customer_and_operator_screens(env, monkeypatch):
+    ticket = await order(env, service="eldorado")
+    assert "от $80" in last(env, CLIENT)["text"]
+    assert "от $80" in last(env, ADMIN)["text"]
+    offer = catalog.offer("eldorado", "standard")
+    monkeypatch.setitem(catalog.OFFERS, ("eldorado", "standard"), replace(offer, price_usd="100.00", price_from=False))
+    for uid, route in [(CLIENT, "c:home"), (ADMIN, f"a:client:{CLIENT}"), (ADMIN, f"a:details:{ticket.id}"),
+                       (CLIENT, f"c:view:{ticket.id}")]:
+        await env.callback(uid, route)
+        assert "от $80" in last(env, uid)["text"]
+    await env.callback(ADMIN, f"a:request_payment:{ticket.id}:{ticket.version}")
+    assert "от $80" in last(env, CLIENT)["text"]
+    await env.proof(CLIENT, "https://example.com/receipt")
+    await env.callback(ADMIN, f"a:proofs:{ticket.id}")
+    assert "от $80" in last(env, ADMIN)["text"]
 
 
 async def test_closed_and_retired_services_cannot_create_orders(env):

@@ -34,6 +34,48 @@ def remember(store, uid=101, name="Клиент"):
     store.remember_user(uid, uid, name, f"client{uid}")
 
 
+def test_minimum_price_migration_only_restores_unpaid_catalog_quotes(tmp_path):
+    path = tmp_path / "desk.sqlite3"
+    old = Store(path)
+    cases = [
+        ("eldorado", "standard", "80", "new", "not_requested", "от $80"),
+        ("eldorado", "standard", "80", "new", "awaiting_payment", "от $80"),
+        ("eldorado", "standard", "90", "new", "awaiting_payment", "$90"),
+        ("eldorado", "historical", "80", "new", "not_requested", "$80"),
+        ("eldorado", "standard", "80", "resolved", "confirmed", "$80"),
+        ("eldorado", "standard", "80", "new", "review", "$80"),
+        ("bybit", "standard", "80", "new", "not_requested", "$80"),
+    ]
+    expected = {}
+    for uid, (service, plan, amount, status, stage, label) in enumerate(cases, 101):
+        remember(old, uid)
+        ticket, _ = old.create_ticket(uid, service, plan, amount)
+        with old.db:
+            old.db.execute("UPDATE tickets SET status=?, payment_stage=? WHERE id=?", (status, stage, ticket.id))
+        expected[ticket.id] = label
+    remember(old, 119)
+    rejected, _ = old.create_ticket(119, "eldorado", "standard", "80")
+    old.request_payment(rejected.id, rejected.version, 42)
+    old.submit_payment_proof(rejected.id, "Чек", 119, 119, 1)
+    old.reject_payment(rejected.id, old.ticket(rejected.id).version, 42)
+    expected[rejected.id] = "$80"
+    old.db.execute("ALTER TABLE tickets DROP COLUMN price_from")
+    old.close()
+
+    migrated = Store(path)
+    try:
+        assert {key: migrated.ticket(key).price_label for key in expected} == expected
+        remember(migrated, 120)
+        fixed, _ = migrated.create_ticket(120, "eldorado", "standard", "80")
+    finally:
+        migrated.close()
+    reopened = Store(path)
+    try:
+        assert reopened.ticket(fixed.id).price_label == "$80"
+    finally:
+        reopened.close()
+
+
 def test_legacy_database_migrates_without_changing_existing_ticket(tmp_path):
     path = tmp_path / "legacy.sqlite3"
     legacy_database(path)

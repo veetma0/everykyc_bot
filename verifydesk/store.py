@@ -9,6 +9,7 @@ import time
 import unicodedata
 
 from .acquisition import SOURCES
+from .catalog import dollars
 
 
 OPEN_STATUSES = ("new", "in_progress", "waiting_user")
@@ -59,6 +60,18 @@ class Ticket:
     payment_stage: str = "legacy"
     has_payment_proof: bool = False
     kind: str = "order"
+    price_from: bool = False
+
+    @property
+    def price_label(self) -> str:
+        return dollars(self.price_usd, price_from=self.price_from)
+
+    @property
+    def awaiting_first_payment(self) -> bool:
+        return (
+            self.kind == "order" and self.status == "new"
+            and self.payment_stage == "awaiting_payment" and not self.has_payment_proof
+        )
 
 
 def can_customer_cancel(ticket: Ticket) -> bool:
@@ -242,6 +255,7 @@ class Store:
                 "service_code": "TEXT NOT NULL DEFAULT 'claude'",
                 "plan_code": "TEXT NOT NULL DEFAULT 'standard'",
                 "price_usd": "TEXT",
+                "price_from": "INTEGER NOT NULL DEFAULT 0 CHECK(price_from IN (0,1))",
                 "demo_network": "TEXT",
                 "waiting_since": "REAL NOT NULL DEFAULT 0",
                 "payment_stage": "TEXT NOT NULL DEFAULT 'legacy'",
@@ -258,6 +272,15 @@ class Store:
                 for name, definition in columns.items():
                     if name not in present:
                         self.db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+                if table == "tickets" and "price_from" not in present:
+                    # The original catalog offered Eldorado standard from $80.
+                    self.db.execute(
+                        """UPDATE tickets SET price_from=1 WHERE kind='order' AND service_code='eldorado'
+                        AND plan_code='standard' AND price_usd='80.00' AND status='new'
+                        AND payment_stage IN ('not_requested','awaiting_payment')
+                        AND NOT EXISTS(SELECT 1 FROM payment_proofs p JOIN messages m ON m.id=p.message_id
+                            WHERE m.ticket_id=tickets.id)"""
+                    )
             self.db.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS review_message_source ON reviews(source_chat,source_message) "
                 "WHERE source_chat IS NOT NULL AND source_message IS NOT NULL"
@@ -381,7 +404,7 @@ class Store:
         row = self.db.execute(
             """SELECT t.id,t.user_id,u.chat_id,u.display_name,u.username,t.status,
             t.version,t.created_at,t.updated_at,t.service_code,t.plan_code,t.price_usd,t.demo_network,t.waiting_since,
-            t.payment_stage,t.kind,
+            t.payment_stage,t.kind,t.price_from,
             EXISTS(SELECT 1 FROM payment_proofs p JOIN messages pm ON pm.id=p.message_id
                 WHERE pm.ticket_id=t.id) has_payment_proof,
             (SELECT COUNT(*) FROM messages m WHERE m.ticket_id=t.id AND m.role='user' AND m.id>t.last_read_id) unread
@@ -434,7 +457,7 @@ class Store:
         service_code: str = "claude",
         plan_code: str = "standard",
         price_usd: str | Decimal | None = None,
-        *, kind: str = "order",
+        *, kind: str = "order", price_from: bool = False,
     ) -> tuple[Ticket, bool]:
         if kind not in {"order", "wholesale"}:
             raise ValueError("Неизвестный тип переписки.")
@@ -450,9 +473,9 @@ class Store:
             now = time.time()
             cursor = self.db.execute(
                 """INSERT INTO tickets(user_id,status,created_at,updated_at,consent_at,service_code,
-                plan_code,price_usd,waiting_since,payment_stage,kind)
-                VALUES(?,'new',?,?,?,?,?,?,?,?,?)""",
-                (user_id, now, now, now, service_code, plan_code, price_usd, now,
+                plan_code,price_usd,price_from,waiting_since,payment_stage,kind)
+                VALUES(?,'new',?,?,?,?,?,?,?,?,?,?)""",
+                (user_id, now, now, now, service_code, plan_code, price_usd, price_from and price_usd is not None, now,
                  "legacy" if kind == "wholesale" else "not_requested", kind),
             )
             self.db.execute(

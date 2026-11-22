@@ -54,9 +54,9 @@ def category_card(category, page=0):
     rows = _two_columns([_service_button(offer) for offer in offers[start:start + CATALOG_PAGE_SIZE]])
     navigation = []
     if page:
-        navigation.append(ui.action(f"‹ {page}/{pages}", f"c:category:{category}:{page - 1}"))
+        navigation.append(ui.action("Предыдущая", f"c:category:{category}:{page - 1}"))
     if page + 1 < pages:
-        navigation.append(ui.action(f"{page + 2}/{pages} ›", f"c:category:{category}:{page + 1}"))
+        navigation.append(ui.action("Следующая", f"c:category:{category}:{page + 1}"))
     if navigation:
         rows.append(navigation)
     rows.append([ui.action("‹ Каталог", "c:catalog")])
@@ -190,7 +190,7 @@ def admin_profile_card(profile, current, timezone, *, has_history=None):
     if current:
         text += (
             f"\n\n<b>📌 Текущий заказ</b>\n{catalog.service_title(current.service_code, current.plan_code)}"
-            f" · {catalog.dollars(current.price_usd)}\n№{current.id:04d} · {ticket_status(current)}"
+            f" · {current.price_label}\n№{current.id:04d} · {ticket_status(current)}"
         )
     else:
         text += "\n\nАктивных заказов пока нет."
@@ -213,7 +213,7 @@ def payment_card(ticket):
     text = (
         f"<b>USDT · ДЕМО</b>\nЗаказ №{ticket.id:04d}\n\n"
         "Выберите сеть, чтобы проверить сценарий оплаты.\nДеньги не переводятся, реквизитов нет.\n\n"
-        f"<b>Стоимость сопровождения:</b> {catalog.dollars(ticket.price_usd)}"
+        f"<b>Стоимость сопровождения:</b> {ticket.price_label}"
     )
     if selected:
         text += (

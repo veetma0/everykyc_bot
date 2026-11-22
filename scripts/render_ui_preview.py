@@ -54,8 +54,8 @@ def export_cards():
     ])), customer=True)
     for page in range(len(rules.PAGES)):
         cards[f"c:rules:{rules.VERSION}:{page}"] = card(rules.card(page, accepted=True), customer=True)
-    cards["c:rules"] = card(rules.full_card(accepted=True), customer=True)
-    samples, examples = {}, {"onboarding:full": card(rules.full_card(), "rules:full")}
+    cards["c:rules"] = card(rules.full_card(accepted=True))
+    samples, examples = {}, {"onboarding:full": card(rules.full_card())}
     for page in range(len(rules.PAGES)):
         examples[f"onboarding:{page}"] = card(rules.card(page))
     with TemporaryDirectory(prefix="everykyc-preview-") as directory:
@@ -79,7 +79,7 @@ def export_cards():
         for offer in catalog.OFFERS.values():
             if not offer.available:
                 continue
-            current = replace(ticket, service_code=offer.service, price_usd=offer.price_usd)
+            current = replace(ticket, service_code=offer.service, price_usd=offer.price_usd, price_from=offer.price_from)
             payment = replace(current, payment_stage="awaiting_payment")
             rejected = replace(payment, has_payment_proof=True)
             review = replace(current, payment_stage="review", has_payment_proof=True)
@@ -95,6 +95,9 @@ def export_cards():
                     row["body"] = f"Здравствуйте! Нужна помощь с проверкой моего аккаунта {offer.title}."
             samples[offer.service]["history_customer"] = card(
                 ui.history(current, sample_messages, history_total, 0, False, "UTC"), "c:history:1:0",
+            )
+            samples[offer.service]["payment_history"] = card(
+                ui.history(payment, sample_messages, history_total, 0, False, "UTC"), "c:history:1:0",
             )
             samples[offer.service]["completed_orders"] = sample_orders_card(done)
             samples[offer.service]["home"] = {}
@@ -209,7 +212,7 @@ for(const [width,dark] of [[320,false],[390,false],[320,true],[390,true]]){
 function currentCard(){
  if(route.startsWith('x:'))return data.examples[route.slice(2)];
  const sample=data.samples[service];
- if(route.startsWith('c:history:'))return sample.history_customer;
+ if(route.startsWith('c:history:'))return state==='payment'?sample.payment_history:sample.history_customer;
  if(state){
   if(route==='c:home')return sample.home[state];
   if((route==='c:profile'||route==='c:orders:0') && state==='done')return sample.completed_orders;

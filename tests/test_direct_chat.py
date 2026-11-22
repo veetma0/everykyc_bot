@@ -335,6 +335,33 @@ async def test_opening_current_transaction_explicitly_selects_it_after_wholesale
     assert not user_messages(env, discussion.id)
 
 
+async def test_home_payment_button_reopens_the_order_for_the_first_and_replacement_receipt(env):
+    ticket = await request_payment(env)
+    discussion = await wholesale(env)
+    for index, label in enumerate(("Перейти к оплате", "Заменить чек")):
+        await env.callback(CLIENT, "c:home")
+        home = last(env, CLIENT)
+        action = home["reply_markup"]["inline_keyboard"][0][0]
+        assert action["text"] == label
+        assert action["callback_data"] == f"c:chat:{ticket.id}"
+        assert env.store.customer_focus(CLIENT).id == discussion.id
+        await env.callback(CLIENT, action["callback_data"])
+        assert env.store.customer_focus(CLIENT).id == ticket.id
+        assert f"Заказ №{ticket.id:04d}" in last(env, CLIENT)["text"]
+        assert env.store.ticket(ticket.id).payment_stage == "awaiting_payment"
+        await env.message(CLIENT, photo=True, caption="Чек", message_id=9500 + index)
+        assert len(env.store.payment_proofs(ticket.id)) == index + 1
+        assert not env.store.payment_proofs(discussion.id)
+        await env.callback(CLIENT, "c:home")
+        home = last(env, CLIENT)
+        assert home["reply_markup"]["inline_keyboard"][0][0]["text"] == "Продолжить заказ"
+        assert "Оператор проверяет чек" in home["text"]
+        if index == 0:
+            review = env.store.ticket(ticket.id)
+            await env.callback(ADMIN, f"a:reject_payment:{ticket.id}:{review.version}")
+            await env.callback(CLIENT, f"c:chat:{discussion.id}")
+
+
 async def test_choosing_another_completed_order_review_finalizes_previous_comment_mode(env):
     first = await complete_order(env)
     second = await complete_order(env)

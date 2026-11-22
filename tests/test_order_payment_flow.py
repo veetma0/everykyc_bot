@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 from telegram.error import Forbidden, TimedOut
 
+from verifydesk import rich, ui
 from verifydesk.store import Store
 
 from .conftest import ADMIN, CLIENT, OTHER
@@ -147,8 +148,54 @@ async def test_failed_requisites_delivery_keeps_recoverable_payment_stage(env, e
     assert "не подтверждена" in last(env, ADMIN)["text"]
     env.request.fail_chat = None
     await env.callback(CLIENT, f"c:requisites:{ticket.id}")
-    assert "Оператор принял заказ" in last(env, CLIENT)["text"]
-    assert "DEMO-" not in last(env, CLIENT)["text"]
+    assert "Реквизиты для оплаты оператор отправляет здесь" in last(env, CLIENT)["text"]
+    assert f"c:view:{ticket.id}" in callbacks(last(env, CLIENT))
+
+
+async def test_payment_card_reopens_operator_details_in_its_own_conversation(env):
+    ticket = await request_payment(env)
+    button = next(b for b in buttons(last(env, CLIENT)) if b["text"] == "Чат и реквизиты")
+    assert rich._button_width(ui.Button.de_json(button, env.app.bot)) <= 199
+    details = "Согласованные реквизиты для тестового заказа"
+    await env.callback(ADMIN, f"a:reply:{ticket.id}")
+    await env.message(ADMIN, details)
+    await env.callback(CLIENT, button["callback_data"])
+    history = last(env, CLIENT)
+    assert details in history["text"]
+    assert "Оператор ·" in history["text"]
+    assert f"c:view:{ticket.id}" in callbacks(history)
+    await env.callback(CLIENT, f"c:view:{ticket.id}")
+    assert button in buttons(last(env, CLIENT))
+    discussion, _ = env.store.create_ticket(CLIENT, kind="wholesale")
+    await env.callback(CLIENT, f"c:requisites:{discussion.id}")
+    assert button not in buttons(last(env, CLIENT))
+    assert details not in last(env, CLIENT)["text"]
+    await env.callback(CLIENT, button["callback_data"])
+    assert env.store.customer_focus(CLIENT).id == ticket.id
+    assert details in last(env, CLIENT)["text"]
+    await env.callback(OTHER, f"c:requisites:{ticket.id}")
+    assert "Этот заказ недоступен" in last(env, OTHER)["text"]
+    assert details not in last(env, OTHER)["text"]
+
+    await env.proof(CLIENT, photo=True)
+    review = env.store.ticket(ticket.id)
+    await env.callback(CLIENT, f"c:requisites:{ticket.id}")
+    assert "Проверяем оплату" in last(env, CLIENT)["text"]
+    assert button not in buttons(last(env, CLIENT))
+    await env.callback(ADMIN, f"a:reject_payment:{ticket.id}:{review.version}")
+    await env.callback(CLIENT, f"c:requisites:{ticket.id}")
+    assert "Нужен другой чек" in last(env, CLIENT)["text"]
+    assert button not in buttons(last(env, CLIENT))
+
+
+async def test_old_requisites_button_returns_closed_order_without_payment_instructions(env):
+    ticket = await request_payment(env)
+    env.store.set_status(ticket.id, ticket.version, "cancelled", CLIENT)
+    await env.callback(CLIENT, f"c:requisites:{ticket.id}")
+    screen = last(env, CLIENT)
+    assert "Заказ отменён" in screen["text"]
+    assert "Реквизиты" not in screen["text"]
+    assert all(b["text"] != "Чат и реквизиты" for b in buttons(screen))
 
 
 async def test_image_failure_prevents_visible_approval_until_evidence_is_opened(env):

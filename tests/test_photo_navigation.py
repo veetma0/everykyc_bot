@@ -31,6 +31,28 @@ def rich_photo(message):
     return photo["photo"][-1]["file_id"]
 
 
+async def test_long_rules_send_and_edit_with_actions_outside_deferred_blocks(env):
+    env.require_terms = True
+    await env.message(CLIENT, "/start")
+    agree = f"c:agree_full:{rules.VERSION}"
+    name, params = display_calls(env)[-1]
+    assert name == "sendRichMessage"
+    assert "<tg-button" not in params["rich_message"]["html"]
+    assert [[b["callback_data"] for b in row] for row in params["reply_markup"]["inline_keyboard"]] == [[agree]]
+    panel_id = next(mid for (uid, mid) in env.request.messages if uid == CLIENT)
+    await env.callback(CLIENT, agree, card=panel_id)
+    assert env.store.terms_state(CLIENT)["accepted_version"] == rules.VERSION
+    assert rich_photo(env.request.messages[(CLIENT, panel_id)]) == expected_photo("catalog")
+    await env.callback(CLIENT, "c:help", card=panel_id)
+    await env.callback(CLIENT, "c:rules", card=panel_id)
+    name, params = display_calls(env)[-1]
+    assert name == "editMessageText" and params["message_id"] == panel_id
+    assert "<tg-button" not in params["rich_message"]["html"]
+    assert [[b["callback_data"] for b in row] for row in params["reply_markup"]["inline_keyboard"]] == [["c:home"]]
+    await env.callback(CLIENT, "c:home", card=panel_id)
+    assert rich_photo(env.request.messages[(CLIENT, panel_id)]) == expected_photo("home")
+
+
 async def test_menu_changes_art_in_place_and_reuses_each_upload(env):
     await env.message(CLIENT, "/menu")
     home = next(msg for (uid, _), msg in env.request.messages.items() if uid == CLIENT)

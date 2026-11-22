@@ -84,4 +84,5 @@ def rendered_panel(params):
         labels.append(buttons)
     body = "\n\n".join(re.findall(r"<p>(.*?)</p>", params["rich_message"]["html"], re.DOTALL))
     body = re.sub(r"<br\s*/?>", "\n", body)
+    labels.extend(params.get("reply_markup", {}).get("inline_keyboard", []))
     return {**params, "text": body, "reply_markup": {"inline_keyboard": labels}}

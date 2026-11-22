@@ -70,14 +70,14 @@ class PanelPhotos:
             (self.bot_id, message.photo[-1].file_unique_id),
         ).fetchone())
 
-    async def show(self, bot, chat_id, source, cover, text, keyboard, *, use_rich=False):
+    async def show(self, bot, chat_id, source, cover, text, keyboard, *, use_rich=False, embed_buttons=True):
         """Send or edit; caller handles rejected edits and ambiguous network errors."""
         common = dict(chat_id=chat_id, reply_markup=keyboard)
         if source:
             common["message_id"] = source.message_id
         if not cover:
             if use_rich:
-                return await rich.show_rich(bot, chat_id, source, text, keyboard)
+                return await rich.show_rich(bot, chat_id, source, text, keyboard, embed_buttons=embed_buttons)
             if source:
                 return await bot.edit_message_text(**common, text=text, parse_mode=ParseMode.HTML,
                                                    disable_web_page_preview=True)
@@ -94,7 +94,8 @@ class PanelPhotos:
 
         async def photo(value):
             if use_rich:
-                return await rich.show_rich(bot, chat_id, source, text, keyboard, photo=value)
+                return await rich.show_rich(bot, chat_id, source, text, keyboard, photo=value,
+                                            embed_buttons=embed_buttons)
             if source:
                 return await bot.edit_message_media(
                     **common, media=InputMediaPhoto(

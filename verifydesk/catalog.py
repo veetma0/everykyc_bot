@@ -113,15 +113,15 @@ def service_title(service: str, plan: str):
 
 
 def offer_price(selected: Offer):
-    return ("от " if selected.price_from else "") + dollars(selected.price_usd)
+    return dollars(selected.price_usd, price_from=selected.price_from)
 
 
-def dollars(value: str | None):
+def dollars(value: str | None, *, price_from: bool = False):
     if value is None:
         return "По согласованию"
     number = Decimal(value)
     rendered = f"{number:.2f}".rstrip("0").rstrip(".")
-    return f"${rendered}"
+    return f"{'от ' if price_from else ''}${rendered}"
 
 
 @dataclass(frozen=True)

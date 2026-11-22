@@ -102,13 +102,17 @@ def button_rows(keyboard):
     return rows
 
 
-async def show_rich(bot, chat_id, source, text, keyboard, *, photo=None):
+async def show_rich(bot, chat_id, source, text, keyboard, *, photo=None, embed_buttons=True):
     """Use PTB's regular request queue and multipart transport for Bot API rich fields."""
     paragraphs = text.split("\n\n") if len(text) > 4096 else [text]
     body = ["<p>" + paragraph.replace("\n", "<br/>") + "</p>" for paragraph in paragraphs if paragraph]
-    body.extend(button_rows(keyboard))
     content = {}
     params = {"chat_id": chat_id, "rich_message": content}
+    if embed_buttons:
+        body.extend(button_rows(keyboard))
+    else:
+        # Telegram Web may defer the trailing blocks of long messages.
+        params["reply_markup"] = keyboard
     if photo is not None:
         ref = photo
         if isinstance(photo, Path):
