@@ -6,6 +6,7 @@ import pytest
 from telegram.error import Forbidden, TimedOut
 
 from verifydesk import rich, ui
+from verifydesk.language import PAID_FULFILLMENT
 from verifydesk.store import Store
 
 from .conftest import ADMIN, CLIENT, OTHER
@@ -50,7 +51,7 @@ async def test_visible_order_journey_requires_payment_review_before_work(env):
     ticket = env.store.ticket(ticket.id)
     assert ticket.status == "in_progress" and ticket.payment_stage == "confirmed"
     assert "🛠 В работе" in last(env, CLIENT)["text"]
-    assert "Оплата подтверждена. Ожидайте сообщения от оператора." in last(env, CLIENT)["text"]
+    assert last(env, CLIENT)["text"].count(PAID_FULFILLMENT) == 1
     finish = f"a:set:{ticket.id}:{ticket.version}:resolved"
     assert finish in callbacks(last(env, ADMIN))
     await env.callback(ADMIN, finish)

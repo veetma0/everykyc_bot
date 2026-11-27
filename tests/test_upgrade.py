@@ -313,7 +313,7 @@ async def test_preview_ticket_history_and_payment_buttons_remain_preview_scoped(
 async def test_help_explains_ordering_and_keeps_official_owner_verification_guidance(env):
     await env.message(CLIENT, "/help")
     screen = last(env, CLIENT)
-    assert {"c:guide:general", "c:rules", "c:privacy", "c:catalog", "c:home"} == set(callbacks(screen))
+    assert {"c:guide:general", "c:rules", "c:privacy", "c:catalog", "c:home", "l:set:en"} == set(callbacks(screen))
     assert all(service not in screen["text"].lower() for service in ("alipay", "chatgpt", "gemini"))
     assert not any(service in value for value in callbacks(screen) for service in ("alipay", "chatgpt", "gemini"))
     await env.callback(CLIENT, "c:guide:claude")

@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Keyboard
 
+from .language import FULFILLMENT, PAID_FULFILLMENT, verbatim
 from .store import OPEN_STATUSES, STATUS_NAMES, TRANSITIONS, Ticket, can_customer_cancel, ticket_status
 from . import catalog, theme
 
@@ -14,6 +15,7 @@ INSTRUCTIONS = (
     "1️⃣ Дождитесь оператора — он объяснит порядок действий.\n"
     "2️⃣ Откройте проверку в своём аккаунте на официальном сайте сервиса и проходите её самостоятельно на свои настоящие данные.\n"
     "3️⃣ Если возникла ошибка, напишите её текст в этот чат без личных данных.\n\n"
+    f"{FULFILLMENT}\n\n"
     "Строго следуйте нашей инструкции; вопросы уточняйте у оператора.\n\n"
     "🔒 <b>Ссылку KYC, документы, селфи, пароли и коды входа сюда не отправляйте.</b>\n"
     "Документы и селфи — только на официальной странице проверки.\n\n"
@@ -21,7 +23,7 @@ INSTRUCTIONS = (
 )
 PRIVACY = (
     "<b>🔒 Какие данные хранит бот</b>\n\n"
-    "Telegram ID, имя и username, выбранную услугу, сообщения, статусы и заметки оператора. "
+    "Telegram ID, имя, username, язык интерфейса, выбранную услугу, сообщения, статусы и заметки оператора. "
     "Переписки по сделке и опту хранятся отдельно. Сохраняются выбранная сеть USDT, выбранная переписка, "
     "версия правил, время согласия, оценки и комментарии к отзывам. "
     "Если вы пришли по ссылке с меткой, сохраняется её источник.\n\n"
@@ -63,19 +65,28 @@ def conversation_keyboard(tickets, selected_id=None):
 ORDER_LIMIT_NOTICE = "Новый заказ можно оформить после завершения текущего."
 
 
+def fulfillment_note(ticket: Ticket) -> str:
+    if ticket.status == "new" and ticket.payment_stage in {"not_requested", "awaiting_payment", "review"}:
+        return f"\n\n{FULFILLMENT}"
+    if ticket.payment_stage == "confirmed" and ticket.status in OPEN_STATUSES:
+        return f"\n\n{PAID_FULFILLMENT}"
+    return ""
+
+
 def home(title: str, ticket: Ticket | None):
     rows = [
         [action("Каталог услуг", "c:catalog", "primary")],
         [action("История", "c:profile"), action("Помощь", "c:help")],
     ]
     text = (
-        f"<b>{escape(title)} · Помощь с верификацией</b>\n\n"
+        f"<b>{verbatim(title)} · Помощь с верификацией</b>\n\n"
         "Выберите сервис в каталоге или напишите его название в чат. Бот покажет цену и условия."
+        f"\n\n{FULFILLMENT}"
     )
     if ticket and ticket.status in OPEN_STATUSES:
         if ticket.kind == "wholesale":
             text = (
-                f"<b>{escape(title)} · Переписка с оператором</b>\n\n"
+                f"<b>{verbatim(title)} · Переписка с оператором</b>\n\n"
                 "Сообщения в этой переписке получает оператор. Цены и условия услуг смотрите в каталоге."
             )
             resume = "Открыть чат"
@@ -92,11 +103,11 @@ def home(title: str, ticket: Ticket | None):
             elif ticket.status == "new" and ticket.payment_stage == "review":
                 hint = "Оператор проверяет чек. Ответ придёт в переписку заказа."
             text = (
-                f"<b>{escape(title)} · Ваш заказ</b>\n\n"
+                f"<b>{verbatim(title)} · Ваш заказ</b>\n\n"
                 f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
                 f" · {ticket.price_label}\n"
                 f"Заказ №{ticket.id:04d} · {ticket_status(ticket)}\n\n"
-                f"{hint}"
+                f"{hint}{fulfillment_note(ticket)}"
             )
         rows = [
             [action(resume, f"c:chat:{ticket.id}", "primary")],
@@ -111,7 +122,8 @@ def prepare():
         "<b>📋 Перед оформлением заказа</b>\n\n"
         "Проверку вы проходите сами на свои данные. Документы и селфи — только на официальной странице. "
         "Оператор поможет с шагами и ошибками.\n\n"
-        "Оформляя заказ, вы подтверждаете, что аккаунт ваш. Затем напишите вопрос в этот чат.",
+        "Оформляя заказ, вы подтверждаете, что аккаунт ваш. Затем напишите вопрос в этот чат."
+        f"\n\n{FULFILLMENT}",
         Keyboard([
             [action("Оформить заказ", "c:create", "primary")],
             [action("← Назад", "c:home")],
@@ -153,7 +165,7 @@ def customer_ticket(ticket: Ticket, timezone: str):
         f"<b>{escape(catalog.service_title(ticket.service_code, ticket.plan_code))}</b>"
         f" · {ticket.price_label}\n"
         f"Заказ №{ticket.id:04d}{payment_network_line(ticket)}\n\n"
-        f"<b>{ticket_status(ticket)}</b>\n{hint}"
+        f"<b>{ticket_status(ticket)}</b>\n{hint}{fulfillment_note(ticket)}"
     )
     rows = []
     if ticket.status not in OPEN_STATUSES:
@@ -190,7 +202,8 @@ def payment_request(ticket: Ticket):
             "По предыдущему чеку оператор не смог подтвердить оплату.\n\n"
             "Пришлите новый скриншот, файл или ссылку на чек в этот чат. "
             "Если не знаете, что исправить, уточните у оператора.\n\n"
-            "Повторно платить без согласования с оператором не нужно.",
+            "Повторно платить без согласования с оператором не нужно."
+            f"\n\n{FULFILLMENT}",
             Keyboard(customer_ticket_navigation(ticket)),
         )
     network_hint = "" if ticket.payment_network else "Для оплаты в USDT укажите сеть. "
@@ -202,7 +215,8 @@ def payment_request(ticket: Ticket):
         "Дождитесь реквизитов и итоговой суммы в переписке заказа.\n\n"
         "После оплаты пришлите сюда фото, файл или ссылку на чек. "
         "Скройте лишние личные данные. Оператор проверит оплату.\n\n"
-        "После отправки чека отменить заказ сможет только оператор.",
+        "После отправки чека отменить заказ сможет только оператор."
+        f"\n\n{FULFILLMENT}",
         Keyboard(customer_ticket_navigation(ticket)),
     )
 
@@ -261,17 +275,30 @@ def admin_status(status: str):
     return STATUS_NAMES[status]
 
 
-def admin_ticket(ticket: Ticket, snippet: str | None = None, *, proof_ready=False):
+def admin_ticket(ticket: Ticket, snippet: str | None = None, *, proof_ready=False, recent_messages=()):
     wholesale = getattr(ticket, "kind", "order") == "wholesale"
-    text = f"<b>{conversation_title(ticket)} · {escape(ticket.display_name)}</b>\n"
+    text = f"<b>{conversation_title(ticket)} · {verbatim(ticket.display_name)}</b>\n"
     if not wholesale:
         text += f"{catalog.service_title(ticket.service_code, ticket.plan_code)} · {ticket.price_label}\n"
     text += ticket_status(ticket) + payment_network_line(ticket)
-    if snippet:
-        excerpt = clip_text(snippet, 420)
-        text += f"\n\n{escape(excerpt)}"
-        if text_units(snippet) > 420:
+    excerpts = [("", snippet)] if snippet else [
+        ("Клиент: " if row["role"] == "user" else "Вы: ", clip_text(row["body"], 400)) for row in recent_messages
+    ]
+    remaining = 420
+    for index, (label, body) in enumerate(excerpts):
+        prefix = ("\n\n" if index else "") + label
+        remaining -= text_units(prefix)
+        if remaining < 1:
             text += "…\nПолностью — в переписке."
+            break
+        visible = clip_text(body, remaining)
+        if not index:
+            text += "\n\n"
+        text += prefix + verbatim(visible)
+        if len(visible) < len(body):
+            text += "…\nПолностью — в переписке."
+            break
+        remaining -= text_units(visible)
     if ticket.payment_stage == "awaiting_payment" and not wholesale:
         text += (
             "\n\nОбъясните клиенту через «Ответить», что нужно исправить в чеке."
@@ -309,7 +336,7 @@ def admin_ticket(ticket: Ticket, snippet: str | None = None, *, proof_ready=Fals
 def admin_details(ticket: Ticket):
     text = (
         f"<b>{conversation_title(ticket)} · подробности</b>\n\n"
-        f"{escape(ticket.display_name)}\n"
+        f"{verbatim(ticket.display_name)}\n"
     )
     if getattr(ticket, "kind", "order") != "wholesale":
         text += f"{catalog.service_title(ticket.service_code, ticket.plan_code)} · {ticket.price_label}\n"
@@ -333,7 +360,7 @@ def admin_details(ticket: Ticket):
 
 
 def reply_receipt(ticket: Ticket, state: str):
-    heading = f"<b>{conversation_title(ticket)} · {escape(ticket.display_name)}</b>"
+    heading = f"<b>{conversation_title(ticket)} · {verbatim(ticket.display_name)}</b>"
     if state == "delivered":
         text = f"{heading}\n\n✅ Ответ отправлен\n{ticket_status(ticket)}\n\nМожно продолжать писать этому клиенту в чат."
         rows = [
@@ -399,6 +426,7 @@ def history(ticket: Ticket, rows, total: int, page: int, admin: bool, timezone: 
     if payment and page == 0:
         texts.append("Реквизиты для оплаты оператор отправляет здесь после согласования суммы."
                      + payment_network_line(ticket))
+        texts.append(FULFILLMENT)
     if total > 4:
         texts.append(f"Страница {page + 1} из {(total + 3) // 4}" + (" · последние сообщения" if page == 0 else ""))
     elif not rows:
@@ -413,7 +441,8 @@ def history(ticket: Ticket, rows, total: int, page: int, admin: bool, timezone: 
         delivery = ""
         if row["role"] == "operator" and row["delivery"] != "delivered":
             delivery = " · доставка в чат не подтверждена"
-        texts.append(f"<b>{label} · {stamp}</b>{delivery}\n{escape(body)}")
+        body = escape(body) if row["role"] == "system" else verbatim(body)
+        texts.append(f"<b>{label} · {stamp}</b>{delivery}\n{body}")
     navigation = []
     if (page + 1) * 4 < total:
         navigation.append(action("← Раньше", f"{prefix}:history:{ticket.id}:{page + 1}"))

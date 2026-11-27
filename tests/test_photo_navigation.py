@@ -17,6 +17,14 @@ def expected_photo(key):
     return "photo-" + digest[:12]
 
 
+@pytest.mark.parametrize("route", ["/start", "c:home", "c:catalog", "c:category:wallets", "c:service:bybit", "p:help"])
+def test_english_covers_use_text_free_brand_mark_only_where_a_cover_fits(route):
+    assert media.cover_for(route, "Welcome", "en") == "avatar"
+    assert media.cover_for(route, "A" * 1025, "en") is None
+    assert media.cover_for(route, "Добро пожаловать", "ru") not in {None, "avatar"}
+    assert media.cover_for("rules:full", "Terms", "en") is None
+
+
 def display_calls(env):
     return [(name, params) for name, params in env.request.calls if name in {
         "sendRichMessage", "sendPhoto", "editMessageMedia", "editMessageCaption", "sendMessage", "editMessageText",
@@ -38,7 +46,9 @@ async def test_long_rules_send_and_edit_with_actions_outside_deferred_blocks(env
     name, params = display_calls(env)[-1]
     assert name == "sendRichMessage"
     assert "<tg-button" not in params["rich_message"]["html"]
-    assert [[b["callback_data"] for b in row] for row in params["reply_markup"]["inline_keyboard"]] == [[agree]]
+    assert [[b["callback_data"] for b in row] for row in params["reply_markup"]["inline_keyboard"]] == [
+        [agree], ["l:set:en"]
+    ]
     panel_id = next(mid for (uid, mid) in env.request.messages if uid == CLIENT)
     await env.callback(CLIENT, agree, card=panel_id)
     assert env.store.terms_state(CLIENT)["accepted_version"] == rules.VERSION
@@ -48,7 +58,9 @@ async def test_long_rules_send_and_edit_with_actions_outside_deferred_blocks(env
     name, params = display_calls(env)[-1]
     assert name == "editMessageText" and params["message_id"] == panel_id
     assert "<tg-button" not in params["rich_message"]["html"]
-    assert [[b["callback_data"] for b in row] for row in params["reply_markup"]["inline_keyboard"]] == [["c:home"]]
+    assert [[b["callback_data"] for b in row] for row in params["reply_markup"]["inline_keyboard"]] == [
+        ["c:home"], ["l:set:en"]
+    ]
     await env.callback(CLIENT, "c:home", card=panel_id)
     assert rich_photo(env.request.messages[(CLIENT, panel_id)]) == expected_photo("home")
 

@@ -21,10 +21,16 @@ COMMANDS = {
 }
 
 
-def cover_for(route: str, text: str) -> str | None:
+def cover_for(route: str, text: str, language: str = "ru") -> str | None:
     visible = unescape(re.sub(r"<[^>]+>", "", text))
     if ui.text_units(visible) > MessageLimit.CAPTION_LENGTH:
         return None
+    cover = _route_cover(route)
+    # Every section illustration has a Russian heading; the brand mark has no text.
+    return "avatar" if cover and language == "en" else cover
+
+
+def _route_cover(route: str) -> str | None:
     if route.startswith("/"):
         return COMMANDS.get(route)
     parts = route.split(":")

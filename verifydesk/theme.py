@@ -7,6 +7,7 @@ import re
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, NetworkError, TelegramError
 
+from .language import render
 
 _path: Path | None = None
 _theme: dict = {"enabled": False, "icons": {}}
@@ -154,7 +155,7 @@ def without_custom_emoji(text, keyboard):
     return text, keyboard
 
 
-async def preview(bot, admin_id: int, data_dir: Path):
+async def preview(bot, admin_id: int, data_dir: Path, *, language="ru"):
     global _theme
     configure(data_dir)
     try:
@@ -173,10 +174,10 @@ async def preview(bot, admin_id: int, data_dir: Path):
         keyboard = InlineKeyboardMarkup([buttons[index:index + 2] for index in range(0, len(buttons), 2)])
         message = await bot.send_message(
             chat_id=admin_id,
-            text=(
+            text=render(
                 "<b>Иконки бирж · GentleeChron</b>\n\n"
                 "Проверяем, поддерживает ли Telegram иконки на кнопках этого бота. "
-                "Названия бирж остаются видны в любом случае."
+                "Названия бирж остаются видны в любом случае.", language,
             ),
             parse_mode="HTML",
             reply_markup=keyboard,

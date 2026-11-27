@@ -5,6 +5,8 @@ from html import escape
 from zoneinfo import ZoneInfo
 
 from . import catalog, ui
+from .language import FULFILLMENT
+from .language import verbatim
 from .store import ticket_status
 
 
@@ -34,7 +36,7 @@ def _service_button(offer):
 
 def catalog_card():
     return (
-        "<b>Каталог услуг</b>\n\nВыберите раздел.",
+        f"<b>Каталог услуг</b>\n\nВыберите раздел.\n\n{FULFILLMENT}",
         ui.Keyboard(
             _two_columns([ui.action(title, f"c:category:{code}") for code, title in catalog.CATEGORIES.items()])
             + [[ui.action("‹ Главная", "c:home")]]
@@ -52,6 +54,7 @@ def category_card(category, page=0):
     if pages > 1:
         lines.append(f"Страница {page + 1} из {pages}")
     lines += ["", "На кнопке — стоимость сопровождения. Доступность для вашей страны уточнит оператор."]
+    lines += ["", FULFILLMENT]
     rows = _two_columns([_service_button(offer) for offer in offers[start:start + CATALOG_PAGE_SIZE]])
     navigation = []
     if page:
@@ -80,7 +83,7 @@ def offer_card(offer):
         text += (
             "\nПроверку вы проходите сами на свои данные в официальном сервисе. "
             "Оформляя заказ, подтверждаете, что аккаунт ваш.\n\n"
-            "<b>Оформление без списаний.</b>"
+            f"<b>Оформление без списаний.</b>\n\n{FULFILLMENT}"
         )
         rows.append([ui.action(
             f"Заказать · {catalog.offer_price(offer)}", f"c:order:{offer.service}:{offer.plan}", "primary",
@@ -106,6 +109,7 @@ def guide(service="general"):
     return (
         f"<b>{escape(title)}</b>\n\n"
         f"{steps}\n\n"
+        f"{FULFILLMENT}\n\n"
         "Проверку проходите самостоятельно на свои данные в официальном сервисе. "
         "Ссылку KYC, документы, селфи, пароли и коды входа сюда не отправляйте."
         + ("\n\nПодписка Claude оплачивается отдельно." if service == "claude" else "")
@@ -132,6 +136,7 @@ def help_card():
         "Выберите услугу и оформите заказ. Если заказ уже открыт, просто напишите сюда.\n\n"
         "<b>Когда платить?</b>\n"
         "Оператор пришлёт реквизиты, когда вы согласуете задачу, цену и условия.\n\n"
+        f"{FULFILLMENT}\n\n"
         "<b>Куда отправлять документы?</b>\n"
         "Загружайте их только на официальной странице проверки аккаунта. Для разбора ошибки достаточно её текста.",
         ui.Keyboard(rows),
@@ -183,11 +188,11 @@ def orders_card(tickets, offset, total, user_id, admin=False):
 def admin_profile_card(profile, current, timezone, *, has_history=None):
     if has_history is None:
         has_history = bool(profile.total_tickets)
-    name = escape(profile.display_name)
+    name = verbatim(profile.display_name)
     since = datetime.fromtimestamp(profile.first_seen_at, ZoneInfo(timezone)).strftime("%d.%m.%Y")
     text = f"<b>👤 Карточка клиента</b>\n{name}"
     if profile.username:
-        text += f" · @{escape(profile.username)}"
+        text += f" · @{verbatim(profile.username)}"
     if current:
         text += (
             f"\n\n<b>📌 Текущий заказ</b>\n{catalog.service_title(current.service_code, current.plan_code)}"
@@ -197,7 +202,7 @@ def admin_profile_card(profile, current, timezone, *, has_history=None):
         text += "\n\nАктивных заказов пока нет."
     text += f"\n\nВсего заказов · <b>{profile.total_tickets}</b>\nЗавершено · <b>{profile.resolved_tickets}</b>"
     text += f"\nС нами с {since} · ID <code>{profile.id}</code>"
-    note = escape(profile.operator_note) if profile.operator_note else "Пока нет."
+    note = verbatim(profile.operator_note) if profile.operator_note else "Пока нет."
     text += f"\n\n<b>📝 Личная заметка · только вам</b>\n{note}"
 
     rows = []
@@ -218,6 +223,7 @@ def payment_card(ticket):
     )
     if selected:
         text += f"\n\nВаш выбор · <b>{escape(selected.payment_label)}</b>"
+    text += f"\n\n{FULFILLMENT}"
     rows = [
         [
             ui.action("TRON · TRC20", f"c:network:{ticket.id}:usdt_tron"),
@@ -259,14 +265,15 @@ def network_page(ticket, group, offset):
         text += "\n\nВыберите сеть для токена USDT0."
     elif group == "bridged":
         text += "\n\nВыберите сеть для мостовой версии токена."
-    return text, ui.Keyboard(rows)
+    return f"{text}\n\n{FULFILLMENT}", ui.Keyboard(rows)
 
 
 def network_selected(ticket, network):
     return (
         f"<b>Сеть выбрана</b>\nЗаказ №{ticket.id:04d} · {ticket.price_label}\n\n"
         f"<b>{escape(network.payment_label)}</b>\n"
-        "Оператор увидит ваш выбор в заказе. Дождитесь подтверждения сети, суммы и адреса в переписке.",
+        "Оператор увидит ваш выбор в заказе. Дождитесь подтверждения сети, суммы и адреса в переписке."
+        f"\n\n{FULFILLMENT}",
         ui.Keyboard(
             [
                 [ui.action("← К заказу", f"c:view:{ticket.id}", "primary")],

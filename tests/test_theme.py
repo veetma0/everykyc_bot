@@ -81,7 +81,8 @@ async def test_emoji_api_success_without_entity_does_not_enable(tmp_path):
         ),
         send_message=AsyncMock(return_value=SimpleNamespace(reply_markup=None)),
     )
-    supported, _ = await theme.preview(bot, 101, tmp_path)
+    supported, _ = await theme.preview(bot, 101, tmp_path, language="en")
+    assert "Checking whether Telegram supports icons" in bot.send_message.await_args.kwargs["text"]
     assert not supported and not theme.enabled()
     assert theme.service_icon("bybit") is None
 

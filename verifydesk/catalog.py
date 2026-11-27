@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from decimal import Decimal
 
+from .language import FULFILLMENT
+
 
 @dataclass(frozen=True)
 class Offer:
@@ -196,5 +198,6 @@ DESCRIPTION = (
     "Выберите Claude, Bybit, Alipay или другой сервис в каталоге. "
     "Стоимость указана в карточке. Оператор уточнит условия для вашей страны и поможет с вопросами.\n\n"
     "Вы проходите проверку сами на официальной площадке. Решение принимает платформа.\n\n"
+    f"{FULFILLMENT}\n\n"
     "Нажмите «Начать», чтобы открыть EVERYKYC."
 )

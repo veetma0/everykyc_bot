@@ -24,7 +24,7 @@ async def test_home_keeps_only_shopping_orders_and_help(env):
     assert "Выберите сервис в каталоге или напишите его название в чат. Бот покажет цену и условия." in card["text"]
     rows = card["reply_markup"]["inline_keyboard"]
     assert [[button["callback_data"] for button in row] for row in rows] == [
-        ["c:catalog"], ["c:profile"], ["c:help"],
+        ["c:catalog"], ["c:profile"], ["c:help"], ["l:set:en"],
     ]
     assert rows[0][0]["style"] == "primary"
     assert "Обсудить опт" not in card["text"]

@@ -1,6 +1,7 @@
 """Profile maintenance must not delay the bot's message handling at startup."""
 
 import logging
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
 
@@ -10,16 +11,17 @@ from telegram.error import TelegramError
 from verifydesk import catalog
 from verifydesk.bot import Desk
 from verifydesk.config import Config
+from verifydesk.language import render
 
 
 def profile_bot(overrides=None):
     values = {
         language: {
-            "name": catalog.PROFILE_NAME,
-            "short_description": catalog.SHORT_DESCRIPTION,
-            "description": catalog.DESCRIPTION,
+            "name": render(catalog.PROFILE_NAME, language),
+            "short_description": render(catalog.SHORT_DESCRIPTION, language),
+            "description": render(catalog.DESCRIPTION, language),
         }
-        for language in ("", "ru")
+        for language in ("", "ru", "en")
     }
     for (language, field), value in (overrides or {}).items():
         values[language][field] = value
@@ -37,17 +39,17 @@ def desk_for(store, tmp_path):
     return Desk(Config("test-token", (9001,), tmp_path), store)
 
 
-async def test_matching_profiles_in_both_languages_are_never_rewritten(store, tmp_path):
+async def test_matching_default_russian_and_english_profiles_are_never_rewritten(store, tmp_path):
     desk = desk_for(store, tmp_path)
     bot = profile_bot()
     await desk.sync_profile(bot)
     for field in ("name", "short_description", "description"):
         getter = getattr(bot, f"get_my_{field}")
-        assert getter.await_args_list == [call(language_code=""), call(language_code="ru")]
+        assert getter.await_args_list == [call(language_code=language) for language in ("", "ru", "en")]
         getattr(bot, f"set_my_{field}").assert_not_awaited()
 
 
-@pytest.mark.parametrize("language", ["", "ru"])
+@pytest.mark.parametrize("language", ["", "ru", "en"])
 @pytest.mark.parametrize(
     "field,expected",
     [
@@ -60,7 +62,10 @@ async def test_sync_updates_only_the_changed_field_and_language(store, tmp_path,
     desk = desk_for(store, tmp_path)
     bot = profile_bot({(language, field): "outdated"})
     await desk.sync_profile(bot)
-    getattr(bot, f"set_my_{field}").assert_awaited_once_with(expected, language_code=language)
+    translated = render(expected, language)
+    if language == "en":
+        assert not re.search(r"[а-яё]", translated, re.I)
+    getattr(bot, f"set_my_{field}").assert_awaited_once_with(translated, language_code=language)
     for other in {"name", "short_description", "description"} - {field}:
         getattr(bot, f"set_my_{other}").assert_not_awaited()
 
@@ -85,6 +90,9 @@ async def test_profile_failure_does_not_abort_startup(store, tmp_path, monkeypat
 
     sync.assert_awaited_once_with(bot)
     configure.assert_called_once_with(tmp_path)
-    assert bot.set_my_commands.await_count == 2
+    command_scopes = [entry.kwargs for entry in bot.set_my_commands.await_args_list]
+    assert len(command_scopes) == 3
+    assert any(entry.get("language_code") == "en" for entry in command_scopes)
+    assert any(entry.get("scope") and entry["scope"].chat_id == 9001 for entry in command_scopes)
     assert store.db.execute("SELECT delivery FROM messages WHERE id=?", (pending,)).fetchone()[0] == "uncertain"
     assert "Бот запущен: @test_bot" in caplog.text

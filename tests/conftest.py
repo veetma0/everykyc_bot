@@ -135,11 +135,13 @@ async def env(store, tmp_path):
 
     async def message(
         uid, text=None, reply_to=None, photo=False, edited=False, message_id=None, chat_type="private",
-        caption=None, document=None, entities=None,
+        caption=None, document=None, entities=None, language_code=None,
     ):
         if chat_type == "private":
             returning_customer(uid)
         user = {"id": uid, "is_bot": False, "first_name": f"Клиент {uid}", "username": f"user{uid}"}
+        if language_code:
+            user["language_code"] = language_code
         number = next(ids)
         data = {
             "message_id": message_id or number,

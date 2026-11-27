@@ -21,6 +21,7 @@ from telegram.ext import (
 )
 
 from .config import Config
+from . import language as i18n
 from .media import PanelPhotos, cover_for
 from .store import OPEN_STATUSES, STATUS_NAMES, StaleTicket, Store, can_customer_cancel, ticket_status
 from . import acquisition, catalog, rich, rules, screens, theme, ui
@@ -50,34 +51,43 @@ def contains_verification_link(message):
     return False
 
 
-def operator_commands():
-    return [
+def localized_commands(commands, language):
+    return [BotCommand(item.command, i18n.render(item.description, language)) for item in commands]
+
+
+def operator_commands(language="ru"):
+    return localized_commands([
         BotCommand("admin", "Кабинет оператора"),
         BotCommand("next", "Следующий заказ"),
         BotCommand("order", "Найти заказ по номеру"),
         BotCommand("start", "Текущее меню"),
         BotCommand("client", "Перейти в режим клиента"),
         BotCommand("clients", "Карточки клиентов"),
-    ]
+        BotCommand("language", "Язык интерфейса"),
+    ], language)
 
 
-def customer_commands(operator=False):
+def customer_commands(operator=False, language="ru"):
     commands = [
         BotCommand("start", "Главное меню"),
         BotCommand("services", "Каталог услуг"),
         BotCommand("status", "Мой заказ"),
         BotCommand("profile", "История заказов"),
         BotCommand("help", "Помощь"),
+        BotCommand("language", "Язык интерфейса"),
         BotCommand("classic", "Обычные кнопки для старых версий Telegram"),
         BotCommand("modern", "Вернуть новое оформление"),
     ]
     if operator:
         commands.append(BotCommand("admin", "Кабинет оператора"))
-    return commands
+    return localized_commands(commands, language)
 
 
 async def deliver(bot, chat_id, text, reply_markup=None, *, store=None):
     """Never retry an ambiguous network send: it may already have reached Telegram."""
+    language = store.language(chat_id) if store is not None else "ru"
+    text = i18n.render(text, language)
+    reply_markup = i18n.markup(reply_markup, language)
     actions = (
         [button.callback_data for row in reply_markup.inline_keyboard for button in row]
         if isinstance(reply_markup, ui.Keyboard) else []
@@ -132,6 +142,50 @@ class Desk:
     def admin_home(self, uid):
         return ui.admin_home(self.store.counts(), self.store.queue_count(uid), self.store.stage_counts())
 
+    async def set_chat_commands(self, bot, uid):
+        lang = self.store.language(uid)
+        if self.is_admin(uid) and not self.client_mode(uid):
+            commands = operator_commands(lang)
+        else:
+            commands = customer_commands(self.is_admin(uid), lang)
+        await bot.set_my_commands(commands, scope=BotCommandScopeChat(uid))
+
+    async def language_action(self, update, context):
+        if not self.remember(update):
+            return
+        uid = update.effective_user.id
+        query = update.callback_query
+        if self.is_admin(uid) and not self.client_mode(uid):
+            self.store.clear_input(uid)
+            self.store.release_claim(uid)
+            context.user_data.pop("order_search_until", None)
+        if query:
+            choice = query.data.split(":")[-1]
+        else:
+            args = context.args or []
+            choice = args[0].lower() if len(args) == 1 else None
+        if choice not in {"en", "ru"}:
+            buttons = ui.Keyboard([[ui.action("Русский", "l:set:ru"), ui.action("English", "l:set:en")]])
+            await self.screen(update, context, "Выберите язык интерфейса.", buttons, route="language")
+            raise ApplicationHandlerStop
+        self.store.set_language(uid, choice)
+        try:
+            await self.set_chat_commands(context.bot, uid)
+        except TelegramError:
+            log.warning("Не удалось обновить меню команд для выбранного языка.")
+        # The consent gate owns both the callback acknowledgement and the rules screen
+        # when the newly selected language is used before the agreement is accepted.
+        await self.terms_gate(update, context)
+        if query:
+            try:
+                await query.answer()
+            except TelegramError:
+                pass
+        operator = self.is_admin(uid) and not self.client_mode(uid)
+        card = self.admin_home(uid) if operator else self.customer_home(uid)
+        await self.screen(update, context, *card, customer=not operator, route="a:home" if operator else "c:home")
+        raise ApplicationHandlerStop
+
     async def interface_command(self, update, context):
         uid = update.effective_user.id
         if self.is_admin(uid) and not self.client_mode(uid):
@@ -177,7 +231,8 @@ class Desk:
                 pass
         self.store.clear_input(uid)
         context.user_data.pop("order_search_until", None)
-        final_page = len(rules.PAGES) - 1
+        lang = self.store.language(uid)
+        final_page = len(rules.pages(lang)) - 1
         if data in {f"c:agree:{rules.VERSION}", f"c:agree_full:{rules.VERSION}"}:
             if accepted or self.store.accept_terms(uid, rules.VERSION, final_page):
                 chats = self.customer_chats(uid)
@@ -190,7 +245,7 @@ class Desk:
         # Old numbered buttons continue an in-progress paginated reading session.
         if not self.store.uses_classic(update.effective_chat.id) and not data.startswith(("c:rules:", "c:agree:")):
             try:
-                shown = await self.screen(update, context, *rules.full_card(accepted=accepted),
+                shown = await self.screen(update, context, *rules.full_card(accepted=accepted, language=lang),
                                           customer=True, route="rules:full")
             except BadRequest:
                 pass  # Telegram definitively rejected the rich presentation; use pages below.
@@ -207,9 +262,9 @@ class Desk:
             except ValueError:
                 requested = 0
             reached = state["viewed_page"] if state and state["viewed_version"] == rules.VERSION else -1
-            if 0 <= requested < len(rules.PAGES) and (accepted or requested <= reached + 1):
+            if 0 <= requested <= final_page and (accepted or requested <= reached + 1):
                 page = requested
-        shown = await self.screen(update, context, *rules.card(page, accepted=accepted),
+        shown = await self.screen(update, context, *rules.card(page, accepted=accepted, language=lang),
                                   customer=True, route="rules:legacy")
         if shown:
             self.store.mark_terms_page(uid, rules.VERSION, page)
@@ -222,8 +277,7 @@ class Desk:
         self.store.release_claim(uid)
         self.store.set_operator_mode(uid, mode)
         try:
-            commands = customer_commands(True) if mode == "client" else operator_commands()
-            await context.bot.set_my_commands(commands, scope=BotCommandScopeChat(uid))
+            await self.set_chat_commands(context.bot, uid)
         except TelegramError:
             pass
         card = (
@@ -231,7 +285,7 @@ class Desk:
             if mode == "client"
             else self.admin_home(uid)
         )
-        await self.screen(update, context, *card, customer=mode == "client", route="c:home" if mode == "client" else "")
+        await self.screen(update, context, *card, customer=mode == "client", route="c:home" if mode == "client" else "a:home")
 
     def customer_home(self, uid, chats=None):
         chats = self.customer_chats(uid) if chats is None else chats
@@ -275,7 +329,9 @@ class Desk:
         user, chat = update.effective_user, update.effective_chat
         if not user or not chat or chat.type != ChatType.PRIVATE:
             return False
-        self.store.remember_user(user.id, chat.id, user.full_name, user.username)
+        language_code = (user.language_code or "").partition("-")[0].lower()
+        self.store.remember_user(user.id, chat.id, user.full_name, user.username,
+                                 language="en" if language_code == "en" else "ru")
         return True
 
     def map_customer_card(self, update, message, keyboard):
@@ -355,7 +411,14 @@ class Desk:
                 words = (update.effective_message.text or "").split()
                 route = words[0].split("@")[0].lower() if words else ""
         public = preview or customer or not self.is_admin(uid) or route == "/preview"
-        cover = cover_for(route, text) if public else None
+        language = self.store.language(uid)
+        if not preview and route in {"c:home", "a:home", "/start", "/menu", "/admin", "c:help", "/help",
+                                     "rules:legacy", "rules:full"}:
+            switch = ui.action("Русский", "l:set:ru") if language == "en" else ui.action("English", "l:set:en")
+            rows = keyboard.inline_keyboard if isinstance(keyboard, ui.Keyboard) else ()
+            keyboard = ui.Keyboard([*rows, [switch]])
+        text, keyboard = i18n.render(text, language), i18n.markup(keyboard, language)
+        cover = cover_for(route, text, language) if public else None
         full_rules = route == "rules:full"
         use_rich = full_rules or (
             public and route != "rules:legacy" and isinstance(keyboard, ui.Keyboard)
@@ -523,8 +586,7 @@ class Desk:
                 await self.screen(update, context, *self.customer_home(uid), route="c:home")
         elif command in {"/start", "/menu"} and self.is_admin(uid):
             try:
-                commands = customer_commands(True) if self.client_mode(uid) else operator_commands()
-                await context.bot.set_my_commands(commands, scope=BotCommandScopeChat(uid))
+                await self.set_chat_commands(context.bot, uid)
             except TelegramError:
                 pass
             card = (
@@ -540,21 +602,19 @@ class Desk:
         await self.screen(update, context, *screens.help_card())
 
     def admin_card(self, ticket, body=None):
+        recent_messages = ()
         if body is None:
             rows = self.store.db.execute(
                 "SELECT role,body FROM messages WHERE ticket_id=? AND role IN ('user','operator') "
                 "ORDER BY id DESC LIMIT 3", (ticket.id,),
             ).fetchall()
-            body = "\n\n".join(
-                ("Клиент: " if r["role"] == "user" else "Вы: ") + ui.clip_text(r["body"], 400)
-                for r in reversed(rows)
-            )
-        text, keyboard = ui.admin_ticket(ticket, body)
+            recent_messages = reversed(rows)
+        text, keyboard = ui.admin_ticket(ticket, body, recent_messages=recent_messages)
         review = self.store.review(ticket.id)
         if review:
             text += "\n\n<b>Отзыв клиента</b>\n" + "⭐" * review["stars"]
             if review["comment"]:
-                text += "\n" + escape(review["comment"])
+                text += "\n" + i18n.verbatim(review["comment"])
         return text, keyboard
 
     async def notify_admins(self, bot, ticket, body=None):
@@ -634,7 +694,7 @@ class Desk:
             body = ui.clip_text(row["body"], 180)
             if ui.text_units(row["body"]) > 180:
                 body += "…"
-            details.append(f"<b>{label}:</b> {escape(body)}")
+            details.append(f"<b>{label}:</b> {i18n.verbatim(body)}")
         context_text = "\n\n".join(details) if details else "Клиент оформил заказ и ждёт ответа."
         rows = [[ui.action("‹ К заказу", f"a:view:{ticket.id}"), ui.action("Следующий", f"a:next:{ticket.id}")],
                 [ui.action("В кабинет", "a:home")]]
@@ -643,7 +703,7 @@ class Desk:
                                        f"a:set:{ticket.id}:{ticket.version}:resolved")])
         prompt, _ = await self.deliver(
             context.bot, uid,
-            f"<b>Ответ · {ui.conversation_title(ticket)} · {escape(ticket.display_name)}</b>\n\n"
+            f"<b>Ответ · {ui.conversation_title(ticket)} · {i18n.verbatim(ticket.display_name)}</b>\n\n"
             f"{context_text}\n\n"
             "Пишите текст, присылайте фото или файл — сообщения сразу уйдут этому клиенту.\n"
             "Можно писать несколько сообщений подряд. Для смены получателя откройте другой заказ.",
@@ -781,9 +841,10 @@ class Desk:
             return
         if verb == "rules":
             page = int(parts[3]) if len(parts) == 4 and parts[2] == rules.VERSION else 0
-            if not 0 <= page < len(rules.PAGES):
+            lang = self.store.language(uid)
+            if not 0 <= page < len(rules.pages(lang)):
                 raise ValueError()
-            await self.screen(update, context, *rules.card(page, accepted=True))
+            await self.screen(update, context, *rules.card(page, accepted=True, language=lang))
         elif verb == "home":
             card = ui.home(self.config.title, None) if preview else self.customer_home(uid)
             await self.screen(update, context, *card, route="c:home")
@@ -1008,7 +1069,7 @@ class Desk:
             prompt, _ = await self.deliver(
                 context.bot,
                 uid,
-                f"<b>📝 Приватная заметка · {escape(profile.display_name)}</b>\nID клиента: {profile.id}\n\n"
+                f"<b>📝 Приватная заметка · {i18n.verbatim(profile.display_name)}</b>\nID клиента: {profile.id}\n\n"
                 "Ответьте на это сообщение. Заметку увидит только оператор; клиенту она не отправляется. До 1200 символов. Для очистки пришлите минус: −",
                 ForceReply(input_field_placeholder="Заметка только для оператора"),
             )
@@ -1048,7 +1109,7 @@ class Desk:
                     elif ticket.payment_stage in {"legacy", "confirmed"}:
                         action = "reply"
                 rows.append([ui.action(
-                    f"{mark}№{ticket.id:04d} · {name} · {short_status}",
+                    f"{mark}№{ticket.id:04d} · {i18n.verbatim(name)} · {short_status}",
                     f"a:{action}:{ticket.id}",
                 )])
             navigation = []
@@ -1120,7 +1181,7 @@ class Desk:
                 ticket = self.store.reject_payment(ticket.id, int(parts[3]), uid)
             notice = (
                 "↩️ Оператор попросил другое подтверждение. Пришлите новый скриншот или ссылку на чек."
-                if verb == "reject_payment" else "✅ Оплата подтверждена. Ожидайте сообщения от оператора."
+                if verb == "reject_payment" else None
             )
             state = await self.notify_customer_status(context.bot, ticket, notice)
             text, keyboard = self.admin_card(ticket)
@@ -1146,7 +1207,7 @@ class Desk:
                     update,
                     context,
                     f"<b>{label} №{ticket.id:04d}?</b>\n"
-                    f"{escape(ticket.display_name)}\n\nКлиент получит сообщение: {STATUS_NAMES[status]}.",
+                    f"{i18n.verbatim(ticket.display_name)}\n\nКлиент получит сообщение: {STATUS_NAMES[status]}.",
                     ui.Keyboard(
                         [
                             [
@@ -1218,7 +1279,7 @@ class Desk:
         rows = [
             [
                 ui.action(
-                    f"{profile.display_name[:30]} · {profile.total_tickets} заказов", f"a:client:{profile.id}"
+                    f"{i18n.verbatim(profile.display_name[:30])} · {profile.total_tickets} заказов", f"a:client:{profile.id}"
                 )
             ]
             for profile in profiles
@@ -1277,11 +1338,12 @@ class Desk:
     async def style_preview(self, update, context):
         if not self.is_admin(update.effective_user.id):
             return
-        _, result = await theme.preview(context.bot, update.effective_user.id, self.config.data_dir)
+        uid = update.effective_user.id
+        _, result = await theme.preview(context.bot, uid, self.config.data_dir, language=self.store.language(uid))
         await self.screen(
             update,
             context,
-            f"<b>Оформление {escape(self.config.title)}</b>\n\n{result}\n\nДля премиум-эмодзи Telegram требует Premium у владельца бота или дополнительный username на Fragment. Основные кнопки работают и без них.",
+            f"<b>Оформление {i18n.verbatim(self.config.title)}</b>\n\n{result}\n\nДля премиум-эмодзи Telegram требует Premium у владельца бота или дополнительный username на Fragment. Основные кнопки работают и без них.",
             ui.Keyboard([[ui.action("🧑‍💻 Кабинет оператора", "a:home")]]),
         )
 
@@ -1341,11 +1403,12 @@ class Desk:
         if attachment_notice:
             buttons.append([ui.action("Показать вложение", f"{prefix}:message:{ticket.id}:{message_id}")])
         buttons.append([ui.action("‹ Переписка", f"{prefix}:history:{ticket.id}:0")])
+        body = escape(row["body"]) if row["role"] == "system" else i18n.verbatim(row["body"])
         shown = await self.screen(
             update,
             context,
             f"<b>{ui.conversation_title(ticket)} · сообщение</b>\n"
-            f"{author} · {self._stamp(row['created_at'])}\n\n{escape(row['body'])}"
+            f"{author} · {self._stamp(row['created_at'])}\n\n{body}"
             + attachment_notice
             + ("\n\n<i>Вложение доступно в обычном режиме заказа.</i>" if preview and attachment else ""),
             ui.Keyboard(buttons),
@@ -1357,7 +1420,7 @@ class Desk:
         """Relay only the payment image the customer explicitly submitted; never download it."""
         if not proof["file_id"]:
             return True
-        caption = f"🧾 Подтверждение · заказ №{ticket.id:04d}"
+        caption = i18n.render(f"🧾 Подтверждение · заказ №{ticket.id:04d}", self.store.language(chat_id))
         try:
             if proof["file_kind"] == "photo":
                 await bot.send_photo(chat_id=chat_id, photo=proof["file_id"], caption=caption, protect_content=True)
@@ -1383,9 +1446,9 @@ class Desk:
         image_sent = await self.send_proof_image(context.bot, update.effective_user.id, ticket, proof)
         text = (
             f"<b>🔎 Проверка оплаты · заказ №{ticket.id:04d}</b>\n"
-            f"{escape(ticket.display_name)} · {ticket.price_label}{ui.payment_network_line(ticket)}\n"
+            f"{i18n.verbatim(ticket.display_name)} · {ticket.price_label}{ui.payment_network_line(ticket)}\n"
             f"Подтверждение {offset + 1} из {len(proofs)}\n\n"
-            f"{escape(proof['body'])}\n\n"
+            f"{i18n.verbatim(proof['body'])}\n\n"
             "Проверьте подтверждение. Только после вашего решения заказ перейдёт в работу."
         )
         rows = []
@@ -1425,9 +1488,8 @@ class Desk:
     async def relay_attachment(self, bot, chat_id, ticket, file_id, file_kind, body, *, operator=False, author_role=None):
         title = ui.conversation_title(ticket)
         author_role = author_role or ("operator" if operator else "user")
-        author = "Оператор" if author_role == "operator" else "Вы" if operator else ticket.display_name
-        header = f"{author} · {title}"
-        caption = escape(header) + ("\n\n" + escape(ui.clip_text(body, 650)) if body else "")
+        author = "Оператор" if author_role == "operator" else "Вы" if operator else i18n.verbatim(ticket.display_name)
+        caption = f"{author} · {title}" + ("\n\n" + i18n.verbatim(ui.clip_text(body, 650)) if body else "")
         if ui.text_units(body) > 650:
             caption += "\n…Полный текст — в переписке."
         if operator and len(self.customer_chats(ticket.user_id)) > 1:
@@ -1436,6 +1498,9 @@ class Desk:
         keyboard = ui.Keyboard([[ui.action("💬 Переписка", f"{prefix}:history:{ticket.id}:0")]])
         if operator:
             keyboard = self.customer_keyboard(ticket.user_id, keyboard)
+        language = self.store.language(chat_id)
+        caption = i18n.render(caption, language)
+        keyboard = i18n.markup(keyboard, language)
         try:
             send = bot.send_photo if file_kind == "photo" else bot.send_document
             sent = await send(chat_id=chat_id, **{file_kind: file_id}, caption=caption,
@@ -1633,7 +1698,7 @@ class Desk:
             sent, state = await self.relay_attachment(context.bot, ticket.chat_id, ticket, file_id, file_kind, body, operator=True)
         else:
             sent, state = await self.deliver(context.bot, ticket.chat_id,
-                f"<b>Оператор · {ui.conversation_title(ticket)}</b>\n\n{escape(body)}\n\n"
+                f"<b>Оператор · {ui.conversation_title(ticket)}</b>\n\n{i18n.verbatim(body)}\n\n"
                 f"{ticket_status(ticket)}\n{escape(self.customer_routing_hint(ticket.user_id, ticket))}",
                 self.customer_keyboard(ticket.user_id, None))
         current = self.store.finalize_operator_delivery(message_id, state, uid)
@@ -1687,8 +1752,9 @@ class Desk:
             ("short_description", catalog.SHORT_DESCRIPTION, bot.get_my_short_description, bot.set_my_short_description),
             ("description", catalog.DESCRIPTION, bot.get_my_description, bot.set_my_description),
         )
-        for language in ("", "ru"):
-            for attribute, expected, read, write in fields:
+        for language in ("", "ru", "en"):
+            for attribute, original, read, write in fields:
+                expected = i18n.render(original, language)
                 current = await read(language_code=language)
                 if getattr(current, attribute) != expected:
                     await write(expected, language_code=language)
@@ -1704,12 +1770,10 @@ class Desk:
             self.store.db.execute("DELETE FROM input_drafts")
         theme.configure(self.config.data_dir)
         await application.bot.set_my_commands(customer_commands())
+        await application.bot.set_my_commands(customer_commands(language="en"), language_code="en")
         for admin_id in self.config.admin_ids:
             try:
-                await application.bot.set_my_commands(
-                    customer_commands(True) if self.client_mode(admin_id) else operator_commands(),
-                    scope=BotCommandScopeChat(admin_id),
-                )
+                await self.set_chat_commands(application.bot, admin_id)
             except TelegramError:
                 log.warning("Оператору нужно открыть чат с ботом и нажать Start.")
         try:
@@ -1732,6 +1796,10 @@ def build_application(config: Config, store: Store, *, request=None):
     if request is not None:
         builder = builder.request(request).get_updates_request(request)
     application = builder.build()
+    application.add_handler(CommandHandler(
+        "language", desk.language_action, filters=filters.ChatType.PRIVATE & filters.UpdateType.MESSAGE,
+    ), group=-2)
+    application.add_handler(CallbackQueryHandler(desk.language_action, pattern=r"^l:set:(en|ru)$"), group=-2)
     application.add_handler(CommandHandler(
         ["classic", "modern"], desk.interface_command, filters=filters.ChatType.PRIVATE & filters.UpdateType.MESSAGE,
     ), group=-1)

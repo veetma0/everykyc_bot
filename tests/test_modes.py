@@ -104,7 +104,8 @@ async def test_mode_survives_database_reopen_and_start_respects_it(env):
     assert env.store.operator_mode(ADMIN) == 'admin'
     await env.message(ADMIN, '/start')
     assert 'a:list:active:0' in callbacks(last(env, ADMIN))
-    assert len(callbacks(last(env, ADMIN))) == 4
+    assert len(callbacks(last(env, ADMIN))) == 5
+    assert 'l:set:en' in callbacks(last(env, ADMIN))
     assert 'a:more' in callbacks(last(env, ADMIN))
     await env.message(ADMIN, '/client')
     assert env.store.operator_mode(ADMIN) == 'client'
@@ -264,6 +265,6 @@ async def test_startup_restores_command_menu_for_persisted_client_mode(env):
     scoped = [params for method, params in env.request.calls
               if method == 'setMyCommands' and params.get('scope', {}).get('chat_id') == ADMIN]
     commands = {item['command'] for item in scoped[-1]['commands']}
-    assert commands == {'start', 'services', 'status', 'profile', 'help', 'classic', 'modern', 'admin'}
+    assert commands == {'start', 'services', 'status', 'profile', 'help', 'language', 'classic', 'modern', 'admin'}
     assert 'clients' not in commands
     assert env.store.operator_mode(ADMIN) == 'client'

@@ -245,6 +245,7 @@ class Store:
     def _migrate(self):
         additions = {
             "users": {
+                "language": "TEXT NOT NULL DEFAULT 'ru' CHECK(language IN ('ru','en'))",
                 "first_seen_at": "REAL NOT NULL DEFAULT 0",
                 "last_seen_at": "REAL NOT NULL DEFAULT 0",
                 "operator_note": "TEXT NOT NULL DEFAULT ''",
@@ -388,18 +389,36 @@ class Store:
         with self.db:
             yield
 
-    def remember_user(self, user_id: int, chat_id: int, name: str, username: str | None):
+    def language(self, user_id: int) -> str:
+        row = self.db.execute("SELECT language FROM users WHERE id=?", (user_id,)).fetchone()
+        return row["language"] if row else "ru"
+
+    def set_language(self, user_id: int, language: str):
+        if language not in ("ru", "en"):
+            raise ValueError("Unsupported language")
+        with self.db:
+            changed = self.db.execute(
+                "UPDATE users SET language=? WHERE id=? AND language<>?", (language, user_id, language)
+            ).rowcount
+            if changed:
+                # Page boundaries can differ between translations.
+                self.db.execute(
+                    "UPDATE user_terms SET viewed_page=-1 WHERE user_id=? AND "
+                    "(accepted_version IS NULL OR accepted_version<>viewed_version)", (user_id,),
+                )
+
+    def remember_user(self, user_id: int, chat_id: int, name: str, username: str | None, *, language: str = "ru"):
         now = time.time()
         name = name[:160].strip()
         if not any(not c.isspace() and unicodedata.category(c) not in {"Cf", "Cc", "Mn", "Me"} for c in name):
             name = "Клиент"
         with self.db:
             self.db.execute(
-                """INSERT INTO users(id,chat_id,display_name,username,first_seen_at,last_seen_at)
-                VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                """INSERT INTO users(id,chat_id,display_name,username,first_seen_at,last_seen_at,language)
+                VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                 chat_id=excluded.chat_id, display_name=excluded.display_name, username=excluded.username,
                 last_seen_at=MAX(users.last_seen_at,excluded.last_seen_at)""",
-                (user_id, chat_id, name, username, now, now),
+                (user_id, chat_id, name, username, now, now, language),
             )
 
     def ticket(self, ticket_id: int) -> Ticket | None:

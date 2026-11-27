@@ -274,7 +274,7 @@ async def test_every_generated_callback_stays_within_telegram_size_limit(env):
     for params in sent(env):
         for value in callbacks(params):
             assert 1 <= len(value.encode()) <= 64
-            assert re.match(r"[cap]:[a-z_]+(?::[a-z0-9_]+)*$", value)
+            assert re.fullmatch(r"[cap]:[a-z_]+(?::[a-z0-9_]+)*|l:set:(?:ru|en)", value)
 
 
 async def test_legacy_create_button_leads_to_current_offers_before_order_creation(env):

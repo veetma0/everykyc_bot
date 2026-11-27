@@ -15,12 +15,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from verifydesk import catalog, rich, rules, screens, theme, ui  # noqa: E402
+from verifydesk import language as i18n  # noqa: E402
 from verifydesk.media import cover_for  # noqa: E402
 from verifydesk.store import OPEN_STATUSES, Store  # noqa: E402
 
 
 def card(value, route=None, *, customer=False):
     text, keyboard = value
+    text, keyboard = i18n.render(text, "ru"), i18n.markup(keyboard, "ru")
     is_rich = bool(keyboard and (route or customer))
     layout = list(rich.layout_rows(keyboard.inline_keyboard)) if is_rich else []
     rows = [buttons for _, buttons in layout] if is_rich else (keyboard.inline_keyboard if keyboard else [])

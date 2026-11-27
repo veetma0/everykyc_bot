@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from verifydesk import catalog, rich, rules, screens, ui
+from verifydesk.language import FULFILLMENT, PAID_FULFILLMENT, render
 from verifydesk.store import Store
 
 from .conftest import ADMIN, CLIENT
@@ -169,6 +170,33 @@ def test_help_keeps_rules_privacy_and_order_instructions_available():
     assert ui.text_units(text) < 700
 
 
+@pytest.mark.parametrize("language", ["ru", "en"])
+def test_customer_gets_fulfillment_timing_before_payment_and_after_confirmation(store, language):
+    store.remember_user(CLIENT, CLIENT, "Customer", None)
+    new, _ = store.create_ticket(CLIENT, "bybit", "standard", "50")
+    payment = store.request_payment(new.id, new.version, ADMIN)
+    network = catalog.NETWORK_BY_CODE["usdt_tron"]
+    prepayment = [
+        ui.home("EVERYKYC", None)[0], ui.prepare()[0], screens.catalog_card()[0],
+        screens.category_card("exchanges")[0], screens.offer_card(catalog.offer("bybit", "standard"))[0],
+        screens.help_card()[0], screens.guide(), screens.guide("bybit"), screens.payment_card(payment)[0],
+        screens.network_page(payment, "usdt0", 8)[0], screens.network_selected(payment, network)[0],
+        ui.history(payment, [], 0, 0, False, "UTC")[0],
+    ]
+    store.submit_payment_proof(payment.id, "Receipt", CLIENT, CLIENT, 1)
+    review = store.ticket(payment.id)
+    for ticket in (new, payment, review, replace(payment, has_payment_proof=True)):
+        prepayment += [ui.customer_ticket(ticket, "UTC")[0], ui.home("EVERYKYC", ticket)[0]]
+    for text in prepayment:
+        assert render(text, language).count(render(FULFILLMENT, language)) == 1
+    working = store.confirm_payment(review.id, review.version, ADMIN)
+    for text in (ui.customer_ticket(working, "UTC")[0], ui.home("EVERYKYC", working)[0]):
+        assert render(text, language).count(render(PAID_FULFILLMENT, language)) == 1
+    for status in ("resolved", "cancelled"):
+        text = ui.customer_ticket(replace(working, status=status), "UTC")[0]
+        assert FULFILLMENT not in text and PAID_FULFILLMENT not in text
+
+
 def test_rules_intro_and_consent_controls_leave_full_rules_intact():
     for page in range(len(rules.PAGES)):
         text, keyboard = rules.card(page)
@@ -271,7 +299,7 @@ async def test_rules_block_all_customer_entrypoints_without_forwarding_content(e
         await env.message(CLIENT, entry)
     card = last(env, CLIENT)
     assert card["text"] == rules.full_card()[0]
-    assert callbacks(card) == [f"c:agree_full:{rules.VERSION}"]
+    assert callbacks(card) == [f"c:agree_full:{rules.VERSION}", "l:set:en"]
     assert env.store.for_user(CLIENT) is None
     assert not sent(env, ADMIN)
     assert env.store.terms_state(CLIENT)["accepted_at"] is None
@@ -287,7 +315,7 @@ async def test_rules_require_all_pages_then_explicit_agreement_and_snapshot_orde
         await env.callback(CLIENT, f"c:rules:{rules.VERSION}:{page}")
         assert rules.PAGES[page] in last(env, CLIENT)["text"]
     agree = f"c:agree:{rules.VERSION}"
-    assert callbacks(last(env, CLIENT))[-1] == agree
+    assert callbacks(last(env, CLIENT))[-2:] == [agree, "l:set:en"]
     assert not env.store.terms_state(CLIENT)["accepted_at"]
     await env.callback(CLIENT, agree)
     state = env.store.terms_state(CLIENT)
@@ -309,7 +337,7 @@ async def test_complete_rules_require_delivery_and_one_current_agreement(env):
     agree = f"c:agree_full:{rules.VERSION}"
     await env.callback(CLIENT, agree)
     assert env.store.terms_state(CLIENT)["accepted_at"] is None
-    assert callbacks(last(env, CLIENT)) == [agree]
+    assert callbacks(last(env, CLIENT)) == [agree, "l:set:en"]
     await env.callback(CLIENT, "c:agree_full:expired")
     assert env.store.terms_state(CLIENT)["accepted_at"] is None
     await env.callback(CLIENT, agree)

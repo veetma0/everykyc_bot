@@ -27,7 +27,7 @@ async def test_classic_before_consent_requires_all_readable_pages(env, rich_star
     assert rules.PAGES[0] in last(env, CLIENT)["text"]
     await env.callback(CLIENT, f"c:agree_full:{rules.VERSION}")
     assert env.store.terms_state(CLIENT)["accepted_at"] is None
-    assert callbacks(last(env, CLIENT)) == [f"c:rules:{rules.VERSION}:1"]
+    assert callbacks(last(env, CLIENT)) == [f"c:rules:{rules.VERSION}:1", "l:set:en"]
     await env.callback(CLIENT, f"c:rules:{rules.VERSION}:{len(rules.PAGES) - 1}")
     assert rules.PAGES[0] in last(env, CLIENT)["text"]
     for i in range(1, len(rules.PAGES)):
